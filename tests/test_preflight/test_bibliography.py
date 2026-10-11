@@ -1,0 +1,164 @@
+"""``collect_cite_keys`` / ``check_bibliography``: cite-key hygiene and BibTeX entry hygiene."""
+
+from __future__ import annotations
+
+from src.services.preflight.rules.bibliography import check_bibliography, collect_cite_keys
+from src.services.preflight.source import build_source
+
+_BIB = """@article{ok, title={T}, author={A}, journal={J}, year={2020}, doi={10.1/x}}"""
+
+
+# --- brief's pinned tests, verbatim -------------------------------------------------------------
+
+
+def test_cite_key_absent_from_bib_is_critical():
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{ghost}\n"}), _BIB)
+    assert ("bib.cite_key_missing", "ghost") in [(f.rule, f.symbol) for f in out]
+
+
+def test_capitalized_natbib_cite_counts_as_a_citation():
+    # CITE_RE in parser/latex.py matches only lowercase "cite"; preflight must still see this
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\Citep{ok}\n"}), _BIB)
+    assert "bib.uncited_entry" not in [f.rule for f in out]
+
+
+def test_commented_cite_does_not_count_as_a_citation():
+    out = check_bibliography(build_source("main.tex", {"main.tex": "% \\cite{ok}\n"}), _BIB)
+    assert "bib.uncited_entry" in [f.rule for f in out]
+
+
+def test_article_missing_journal_is_reported():
+    bib = "@article{a, title={T}, author={A}, year={2020}}"
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{a}\n"}), bib)
+    assert ("bib.missing_required_field", "journal") in [(f.rule, f.symbol) for f in out]
+
+
+def test_entries_sharing_a_doi_are_duplicates():
+    bib = (
+        "@article{a, title={One}, doi={10.1/x}, journal={J}, year={2020}}\n"
+        "@article{b, title={Two}, doi={10.1/X}, journal={J}, year={2021}}"
+    )
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{a}\\cite{b}\n"}), bib)
+    assert "bib.duplicate_entry" in [f.rule for f in out]
+
+
+def test_entry_without_doi_or_eprint_is_info():
+    bib = "@book{b, title={T}, author={A}, publisher={P}, year={2020}}"
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{b}\n"}), bib)
+    assert "bib.missing_doi" in [f.rule for f in out]
+
+
+def test_no_bib_content_reports_nothing_rather_than_everything():
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{a}\n"}), "")
+    assert out == []
+
+
+# --- extra edge cases -----------------------------------------------------------------------
+
+
+def test_entry_with_eprint_but_no_doi_is_not_missing_doi():
+    bib = "@article{a, title={T}, journal={J}, year={2020}, eprint={2101.00001}}"
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{a}\n"}), bib)
+    assert "bib.missing_doi" not in [f.rule for f in out]
+
+
+def test_entries_sharing_a_normalized_title_without_a_doi_are_duplicates():
+    bib = (
+        "@article{a, title={Attention Is All You Need}, journal={J}, year={2017}}\n"
+        "@article{b, title={attention is all you need.}, journal={J}, year={2017}}"
+    )
+    out = [
+        f
+        for f in check_bibliography(build_source("main.tex", {"main.tex": "\\cite{a}\\cite{b}\n"}), bib)
+        if f.rule == "bib.duplicate_entry"
+    ]
+    assert len(out) == 1
+    assert out[0].count == 2
+
+
+def test_entries_without_doi_or_title_are_not_treated_as_duplicates_of_each_other():
+    bib = "@misc{a, year={2020}}\n@misc{b, year={2021}}"
+    out = [
+        f
+        for f in check_bibliography(build_source("main.tex", {"main.tex": "\\cite{a}\\cite{b}\n"}), bib)
+        if f.rule == "bib.duplicate_entry"
+    ]
+    assert out == []
+
+
+def test_unknown_entry_type_only_requires_a_title():
+    bib = "@misc{a, title={T}, year={2020}}"
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{a}\n"}), bib)
+    assert "bib.missing_required_field" not in [f.rule for f in out]
+
+
+def test_missing_title_is_reported_for_any_entry_type():
+    bib = "@article{a, journal={J}, year={2020}, doi={10.1/x}}"
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{a}\n"}), bib)
+    assert ("bib.missing_required_field", "title") in [(f.rule, f.symbol) for f in out]
+
+
+def test_nocite_only_key_is_not_a_real_citation():
+    # \nocite matches CITE_RE's pattern but extract_cite_keys deliberately excludes it.
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\nocite{ok}\n"}), _BIB)
+    assert "bib.uncited_entry" in [f.rule for f in out]
+
+
+def test_capitalized_cite_with_pre_and_post_notes_is_still_recognized():
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\Citep[see][p. 3]{ok}\n"}), _BIB)
+    assert "bib.uncited_entry" not in [f.rule for f in out]
+
+
+def test_cite_key_missing_is_reported_once_per_key_with_an_occurrence_count():
+    doc = "\\cite{ghost}\\cite{ghost}\n"
+    out = [
+        f
+        for f in check_bibliography(build_source("main.tex", {"main.tex": doc}), _BIB)
+        if f.rule == "bib.cite_key_missing"
+    ]
+    assert len(out) == 1
+    assert out[0].symbol == "ghost"
+
+
+# --- collect_cite_keys ------------------------------------------------------------------------
+
+
+def test_collect_cite_keys_reports_the_citing_file_and_line():
+    src = build_source("main.tex", {"main.tex": "intro\n\\cite{a}\n"})
+    keys = collect_cite_keys(src)
+    assert keys["a"] == ("main.tex", 2)
+
+
+def test_collect_cite_keys_keeps_the_first_occurrence_across_files():
+    # iter_masked() yields each file whole, main file first, then includes in resolution order —
+    # so a citation anywhere in main.tex wins over one in an include regardless of where \input
+    # sits textually, and between two sibling includes the earlier \input wins.
+    src = build_source(
+        "main.tex",
+        {
+            "main.tex": "\\input{sec/one}\n\\input{sec/two}\n",
+            "sec/one.tex": "\\cite{a}\n",
+            "sec/two.tex": "\\cite{a}\n",
+        },
+    )
+    keys = collect_cite_keys(src)
+    assert keys["a"] == ("sec/one.tex", 1)
+
+
+def test_collect_cite_keys_prefers_the_main_file_over_an_include():
+    src = build_source(
+        "main.tex",
+        {"main.tex": "\\input{sec/one}\n\\cite{a}\n", "sec/one.tex": "\\cite{a}\n"},
+    )
+    keys = collect_cite_keys(src)
+    assert keys["a"] == ("main.tex", 2)
+
+
+def test_collect_cite_keys_unions_capitalized_and_lowercase_forms():
+    src = build_source("main.tex", {"main.tex": "\\citep{a}\\Citep{b}\n"})
+    assert set(collect_cite_keys(src)) == {"a", "b"}
+
+
+def test_collect_cite_keys_ignores_commented_out_cites():
+    src = build_source("main.tex", {"main.tex": "% \\cite{a}\n\\cite{b}\n"})
+    assert set(collect_cite_keys(src)) == {"b"}
