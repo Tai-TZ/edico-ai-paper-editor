@@ -81,3 +81,12 @@ def test_commented_out_float_is_ignored():
 def test_nameref_is_not_a_tracked_reference_command():
     # \nameref is not in the covered set (ref, eqref, autoref, cref, Cref, pageref, vref).
     assert _rules("\\nameref{x}\n") == []
+
+
+def test_undefined_ref_is_reported_once_per_key_with_an_occurrence_count():
+    doc = "See \\ref{fig:a}.\nAlso \\ref{fig:a}.\nAnd \\ref{fig:a}.\n"
+    out = [f for f in check_crossref(build_source("main.tex", {"main.tex": doc})) if f.rule == "crossref.undefined_ref"]
+    assert len(out) == 1
+    assert out[0].symbol == "fig:a"
+    assert out[0].count == 3
+    assert out[0].line == 1

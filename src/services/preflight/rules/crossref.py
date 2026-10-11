@@ -53,12 +53,29 @@ def check_crossref(src: PreflightSource) -> list[Finding]:
 
     findings: list[Finding] = []
 
-    # crossref.undefined_ref — one finding per reference occurrence whose key has no label.
+    # crossref.undefined_ref — one finding per unique undefined key (not per occurrence): ten
+    # \ref{x} calls to a missing label are one problem (add the label), not ten critical rows.
+    # count carries the occurrence total; file/line point at the first occurrence so "go to line"
+    # lands somewhere useful.
+    undefined_refs: dict[str, tuple[str, int, int]] = {}  # key -> (file, first offset, count)
     for key, path, offset in refs:
-        if key not in labels_by_key:
-            findings.append(
-                Finding(rule="crossref.undefined_ref", file=path, line=src.locate(path, offset), symbol=key)
+        if key in labels_by_key:
+            continue
+        if key not in undefined_refs:
+            undefined_refs[key] = (path, offset, 1)
+        else:
+            first_path, first_offset, count = undefined_refs[key]
+            undefined_refs[key] = (first_path, first_offset, count + 1)
+    for key, (path, offset, count) in undefined_refs.items():
+        findings.append(
+            Finding(
+                rule="crossref.undefined_ref",
+                file=path,
+                line=src.locate(path, offset),
+                symbol=key,
+                count=count,
             )
+        )
 
     # crossref.float_without_label — a float is clean once any \label appears in its body.
     for path, masked in src.iter_masked():
