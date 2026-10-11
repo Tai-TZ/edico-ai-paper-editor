@@ -143,17 +143,23 @@ def _include_targets(masked: str) -> Iterator[str]:
 def build_source(main_file: str, files: Mapping[str, str]) -> PreflightSource:
     """Resolve ``\\input``/``\\include`` depth-first from ``main_file``, masking each file as it is read.
 
-    ``files`` is visited at most once each: a repeat path (including a true cycle's back-edge) is
-    recorded in ``unresolved_includes`` instead of being followed, so a cyclic include graph still
-    returns.
+    ``visited`` makes every file appear at most once in ``files`` (a shared "diamond" include —
+    two files both ``\\input``-ing the same third file — is resolved once and silently skipped the
+    second time; nothing is missing, so it is not recorded). ``ancestors`` is the current DFS path:
+    a target already on it is a true cycle, whose back-edge is recorded in ``unresolved_includes``
+    instead of being followed, so a cyclic include graph still returns. A target absent from
+    ``files`` altogether is also recorded there.
     """
     resolved: list[SourceFile] = []
     visited: set[str] = set()
+    ancestors: list[str] = []
     unresolved: list[str] = []
 
     def resolve(path: str) -> None:
-        if path in visited:
+        if path in ancestors:
             unresolved.append(path)
+            return
+        if path in visited:
             return
         visited.add(path)
         text = files.get(path)
@@ -162,8 +168,10 @@ def build_source(main_file: str, files: Mapping[str, str]) -> PreflightSource:
             return
         masked = _mask(text)
         resolved.append(SourceFile(path=path, text=text, masked=masked))
+        ancestors.append(path)
         for target in _include_targets(masked):
             resolve(target)
+        ancestors.pop()
 
     resolve(main_file)
     return PreflightSource(main_file=main_file, files=tuple(resolved), unresolved_includes=tuple(unresolved))

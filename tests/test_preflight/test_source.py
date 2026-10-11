@@ -54,3 +54,21 @@ def test_input_cycle_terminates():
 def test_commented_out_input_is_not_followed():
     src = build_source("main.tex", {"main.tex": "% \\input{sec/one}\n"})
     assert src.unresolved_includes == ()
+
+
+def test_diamond_include_is_not_unresolved():
+    files = {
+        "main.tex": "\\input{a}\n\\input{b}\n",
+        "a.tex": "\\input{common}\n",
+        "b.tex": "\\input{common}\n",
+        "common.tex": "\\label{shared}\n",
+    }
+    src = build_source("main.tex", files)
+    assert [f.path for f in src.files] == ["main.tex", "a.tex", "common.tex", "b.tex"]
+    assert src.unresolved_includes == ()
+
+
+def test_self_include_is_a_cycle():
+    src = build_source("a.tex", {"a.tex": "\\input{a}\n"})
+    assert [f.path for f in src.files] == ["a.tex"]
+    assert "a.tex" in src.unresolved_includes
