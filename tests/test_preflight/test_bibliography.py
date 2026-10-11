@@ -43,9 +43,13 @@ def test_entries_sharing_a_doi_are_duplicates():
 
 
 def test_entry_without_doi_or_eprint_is_info():
+    # Full finding set, not membership: a book with a populated publisher must report ONLY
+    # bib.missing_doi. The loose "in" form of this assertion is what let a prior bug through —
+    # bib.missing_required_field used to fire on "publisher" unconditionally for every @book
+    # (see test_book_without_publisher_is_reported and friends below for the field itself).
     bib = "@book{b, title={T}, author={A}, publisher={P}, year={2020}}"
     out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{b}\n"}), bib)
-    assert "bib.missing_doi" in [f.rule for f in out]
+    assert [(f.rule, f.symbol) for f in out] == [("bib.missing_doi", "b")]
 
 
 def test_no_bib_content_reports_nothing_rather_than_everything():
@@ -118,6 +122,91 @@ def test_cite_key_missing_is_reported_once_per_key_with_an_occurrence_count():
     ]
     assert len(out) == 1
     assert out[0].symbol == "ghost"
+
+
+# --- raw-only required-field presence checks (publisher/booktitle/school) ----------------------
+# parse_bib_entries never puts these three fields in its parsed dict (only key, type, title,
+# author, year, doi, eprint, journal, raw come back — src/services/parser/latex.py:159-169), so
+# _field_is_present falls back to a presence scan over raw text for them. Each pair below proves
+# that is a real presence check and not an unconditional miss: present -> quiet, absent -> flagged.
+
+
+def test_populated_book_publisher_is_not_reported():
+    bib = "@book{b, title={T}, author={A}, publisher={P}, year={2020}}"
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{b}\n"}), bib)
+    assert "bib.missing_required_field" not in [f.rule for f in out]
+
+
+def test_book_without_publisher_is_reported():
+    bib = "@book{b, title={T}, author={A}, year={2020}}"
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{b}\n"}), bib)
+    assert ("bib.missing_required_field", "publisher") in [(f.rule, f.symbol) for f in out]
+
+
+def test_populated_inproceedings_booktitle_is_not_reported():
+    bib = "@inproceedings{a, title={T}, booktitle={NeurIPS}, year={2020}, doi={10.1/x}}"
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{a}\n"}), bib)
+    assert "bib.missing_required_field" not in [f.rule for f in out]
+
+
+def test_inproceedings_without_booktitle_is_reported():
+    bib = "@inproceedings{a, title={T}, year={2020}, doi={10.1/x}}"
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{a}\n"}), bib)
+    assert ("bib.missing_required_field", "booktitle") in [(f.rule, f.symbol) for f in out]
+
+
+def test_populated_conference_booktitle_is_not_reported():
+    bib = "@conference{a, title={T}, booktitle={ICML}, year={2020}, doi={10.1/x}}"
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{a}\n"}), bib)
+    assert "bib.missing_required_field" not in [f.rule for f in out]
+
+
+def test_conference_without_booktitle_is_reported():
+    bib = "@conference{a, title={T}, year={2020}, doi={10.1/x}}"
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{a}\n"}), bib)
+    assert ("bib.missing_required_field", "booktitle") in [(f.rule, f.symbol) for f in out]
+
+
+def test_populated_phdthesis_school_is_not_reported():
+    bib = "@phdthesis{a, title={T}, school={MIT}, year={2020}, doi={10.1/x}}"
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{a}\n"}), bib)
+    assert "bib.missing_required_field" not in [f.rule for f in out]
+
+
+def test_phdthesis_without_school_is_reported():
+    bib = "@phdthesis{a, title={T}, year={2020}, doi={10.1/x}}"
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{a}\n"}), bib)
+    assert ("bib.missing_required_field", "school") in [(f.rule, f.symbol) for f in out]
+
+
+def test_populated_mastersthesis_school_is_not_reported():
+    bib = "@mastersthesis{a, title={T}, school={MIT}, year={2020}, doi={10.1/x}}"
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{a}\n"}), bib)
+    assert "bib.missing_required_field" not in [f.rule for f in out]
+
+
+def test_mastersthesis_without_school_is_reported():
+    bib = "@mastersthesis{a, title={T}, year={2020}, doi={10.1/x}}"
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{a}\n"}), bib)
+    assert ("bib.missing_required_field", "school") in [(f.rule, f.symbol) for f in out]
+
+
+def test_double_quoted_raw_only_field_value_is_recognized():
+    bib = '@book{b, title={T}, publisher = "P", year={2020}, doi={10.1/x}}'
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{b}\n"}), bib)
+    assert "bib.missing_required_field" not in [f.rule for f in out]
+
+
+def test_nested_braces_in_a_raw_only_field_value_is_recognized():
+    bib = "@book{b, title={T}, publisher={A {B} C}, year={2020}, doi={10.1/x}}"
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{b}\n"}), bib)
+    assert "bib.missing_required_field" not in [f.rule for f in out]
+
+
+def test_empty_braces_on_a_raw_only_field_still_counts_as_missing():
+    bib = "@book{b, title={T}, publisher={}, year={2020}, doi={10.1/x}}"
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{b}\n"}), bib)
+    assert ("bib.missing_required_field", "publisher") in [(f.rule, f.symbol) for f in out]
 
 
 # --- collect_cite_keys ------------------------------------------------------------------------

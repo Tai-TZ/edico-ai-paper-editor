@@ -36,9 +36,45 @@ _REQUIRED_FIELDS_BY_TYPE: dict[str, tuple[str, ...]] = {
     "mastersthesis": ("school", "year"),
 }
 
+# Fields required above that parse_bib_entries' dict never carries (it only returns key, type,
+# title, author, year, doi, eprint, journal, raw — see src/services/parser/latex.py). Checked
+# instead by a presence-only scan of the entry's raw text: a braced value (one level of nested
+# braces allowed, e.g. publisher={A {B} C}), a double-quoted value, or a bare token, matched
+# case-insensitively since BibTeX field names are. This is deliberately not a real BibTeX parse —
+# it only needs to answer "is this field present and non-empty".
+_RAW_ONLY_FIELD_RE: dict[str, re.Pattern[str]] = {
+    field: re.compile(
+        r"\b" + field + r"\s*=\s*(\{(?:[^{}]|\{[^{}]*\})*\}|\"[^\"]*\"|[^,}\s][^,}]*)",
+        re.IGNORECASE,
+    )
+    for field in ("publisher", "booktitle", "school")
+}
+
 
 def _required_fields(entry_type: str) -> tuple[str, ...]:
     return ("title", *_REQUIRED_FIELDS_BY_TYPE.get(entry_type, ()))
+
+
+def _strip_braces_or_quotes(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == "{" and value[-1] == "}":
+        return value[1:-1].strip()
+    if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+        return value[1:-1].strip()
+    return value
+
+
+def _field_is_present(entry: dict, field: str) -> bool:
+    """Non-empty value for ``field`` on a parsed bib entry.
+
+    Prefers the parsed dict (title, author, year, doi, eprint, journal — the fields
+    parse_bib_entries actually exposes) and falls back to a raw-text presence check for the
+    required fields it does not (publisher, booktitle, school).
+    """
+    if field in _RAW_ONLY_FIELD_RE:
+        match = _RAW_ONLY_FIELD_RE[field].search(entry.get("raw", ""))
+        return bool(match and _strip_braces_or_quotes(match.group(1)))
+    return bool(entry.get(field, "").strip())
 
 
 def collect_cite_keys(src: PreflightSource) -> dict[str, tuple[str, int]]:
@@ -100,7 +136,7 @@ def check_bibliography(src: PreflightSource, bib_content: str) -> list[Finding]:
     # the bibliography isn't one of src's files.
     for key, entry in entries.items():
         for field in _required_fields(entry.get("type", "")):
-            if not entry.get(field, "").strip():
+            if not _field_is_present(entry, field):
                 findings.append(Finding(rule="bib.missing_required_field", symbol=field, excerpt=key))
         if not entry.get("doi", "").strip() and not entry.get("eprint", "").strip():
             findings.append(Finding(rule="bib.missing_doi", symbol=key))
