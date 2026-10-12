@@ -172,7 +172,7 @@ const COPY: Record<UiLanguage, PreflightCopy> = {
     run: "Chạy kiểm tra trước khi nộp",
     running: "Đang kiểm tra…",
     clean:
-      "Không phát hiện vấn đề nào. Đây là kiểm tra máy tự động, không phải lời cam kết bài sẽ được chấp nhận — hãy luôn đọc kỹ thông báo mời bài (call for papers) của tạp chí/hội nghị.",
+      "Không phát hiện vấn đề nào. Đây là kiểm tra tự động, không phải lời cam kết bài sẽ được chấp nhận — hãy luôn đọc kỹ thông báo mời bài (call for papers) của tạp chí/hội nghị.",
     approximate:
       "Số từ này chỉ là ước tính — mỗi tạp chí/hội nghị tính số từ theo cách khác nhau, nên có thể không khớp với số liệu mà hệ thống của họ đưa ra.",
     goToLine: "Tới dòng",
@@ -183,7 +183,7 @@ const COPY: Record<UiLanguage, PreflightCopy> = {
     },
     skippedGroup: "Chưa kiểm tra — nhóm này chưa được bật cho lần nộp này.",
     suppressedRule:
-      "Đã tắt cho báo cáo này — vì xung đột với một cài đặt khác hoặc một file chưa được giải quyết.",
+      "Đã tắt cho báo cáo này — vì xung đột với một cài đặt khác hoặc một tệp \\input chưa phân giải được.",
     noContent:
       "Chưa có gì để kiểm tra. Bản thảo vẫn còn trống hoặc mới chỉ là mẫu — mọi mục kiểm tra bị bỏ qua vì lý do này, không phải vì bị tắt.",
     rules: {

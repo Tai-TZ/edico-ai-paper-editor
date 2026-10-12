@@ -22,8 +22,16 @@ describe("preflightCopy", () => {
     expect(same).toEqual([]);
   });
 
-  it("says the word count is approximate", () => {
-    expect(preflightCopy("en").approximate.trim()).not.toBe("");
-    expect(preflightCopy("vi").approximate.trim()).not.toBe("");
+  it("says the word count is approximate and varies by venue", () => {
+    // Substring checks, not a whole-sentence match, so ordinary rewording stays green — but
+    // gutting either idea (it's an estimate; venues count differently) must fail.
+    const en = preflightCopy("en").approximate;
+    expect(en).toMatch(/\bestimate\b/i);
+    expect(en).toMatch(/venue/i);
+    expect(en).toMatch(/differently/i);
+
+    const vi = preflightCopy("vi").approximate;
+    expect(vi).toMatch(/ước tính/i);
+    expect(vi).toMatch(/khác nhau/i);
   });
 });
