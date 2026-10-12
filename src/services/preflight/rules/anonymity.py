@@ -446,6 +446,7 @@ _FUNDING_CONTEXT_RE = re.compile(
     r"|grants?"
     r"|award(?:s|ed)?"
     r"|grateful"
+    r"|thank(?:s|ed|ing)?"
     r"|acknowledg(?:e|es|ed|ing|ement|ements|ment|ments)"
     r"|sponsor(?:s|ed|ship)?"
     r"|financ(?:e|es|ed|ing|ial)"
@@ -455,6 +456,7 @@ _FUNDING_CONTEXT_RE = re.compile(
     r"|kinh\s+phí|kinh\s+phi"
     r"|hỗ\s+trợ|ho\s+tro"
     r"|học\s+bổng|hoc\s+bong"
+    r"|cảm\s+ơn|cam\s+on"
     r")\b",
     re.IGNORECASE,
 )

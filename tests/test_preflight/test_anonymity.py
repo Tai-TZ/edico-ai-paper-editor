@@ -462,3 +462,15 @@ def test_vietnamese_funding_context_words_are_accepted_accented_and_unaccented()
     ):
         out = check_anonymity(build_source("main.tex", {"main.tex": text + "\n"}))
         assert "anon.funding_identifiers" in [f.rule for f in out], text
+
+
+def test_thanks_counts_as_funding_context():
+    for text in (
+        "We thank the NSF (NSF-1234567).",
+        "The authors thank NAFOSTED 103.99-2019.12.",
+        "We thank the National Science Foundation, NSF-1234567.",
+        "Cảm ơn NAFOSTED 103.99-2019.12.",
+        "Cam on NAFOSTED 103.99-2019.12.",
+    ):
+        out = check_anonymity(build_source("main.tex", {"main.tex": text + "\n"}))
+        assert "anon.funding_identifiers" in [f.rule for f in out], text
