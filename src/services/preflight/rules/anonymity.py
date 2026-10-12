@@ -123,6 +123,17 @@ def _iter_brace_commands(masked: str, command_re: re.Pattern[str]) -> Iterator[t
 
 # --- anonymous-placeholder check, shared by author_populated and affiliation_populated --------
 
+# LaTeX forced-linebreak tokens: "\\" (optionally starred, optionally followed by a "[<len>]"
+# spacing argument), "\newline", or "\par". Stripped as their OWN token, before the generic
+# _COMMAND_TOKEN_RE below, and always replaced with whitespace (never with nothing) — "\\" is TWO
+# backslash characters, so the generic one-backslash-plus-letters pattern never recognises it.
+# Left unstripped, a bare "\\" survives into "visible text" as a stray backslash that can never
+# equal any string in _ANONYMOUS_PLACEHOLDERS (a false critical on a correctly anonymised paper),
+# and "\\MIT" (no space before the next word) gets misread by the generic pattern as a command
+# literally named "\MIT", silently dropping "MIT" from the reported symbol. Stripping "\\" as
+# whitespace FIRST fixes both: "Jane Doe\\MIT" -> "Jane Doe MIT", so both words survive.
+_LINEBREAK_RE = re.compile(r"\\\\\*?(?:\[[^\]]*\])?|\\newline\b|\\par\b")
+
 # Every LaTeX command token (backslash + letters + optional star), stripped to get the argument's
 # *visible* text — a venue's own anonymising macro (\anonymousauthors) is pure markup with nothing
 # left over once this is removed, which is exactly the "anonymised" case, not a leak.
@@ -144,8 +155,11 @@ _ANONYMOUS_PLACEHOLDERS = frozenset(
 def _visible_text(raw: str) -> str:
     """``raw`` with every LaTeX command token and brace character removed, whitespace collapsed —
     the plain text a reader would actually see. Command *arguments* are kept (so
-    ``\\textbf{Jane Doe}`` still surfaces "Jane Doe"); only the command names and braces go."""
-    text = _COMMAND_TOKEN_RE.sub(" ", raw)
+    ``\\textbf{Jane Doe}`` still surfaces "Jane Doe"); only the command names and braces go.
+    Linebreak tokens (``\\\\``, ``\\newline``, ``\\par``) are stripped FIRST and as whitespace, not
+    as nothing — see ``_LINEBREAK_RE`` for why order matters here."""
+    text = _LINEBREAK_RE.sub(" ", raw)
+    text = _COMMAND_TOKEN_RE.sub(" ", text)
     text = text.replace("{", " ").replace("}", " ")
     return " ".join(text.split())
 
@@ -313,8 +327,35 @@ _FUNDING_AGENCIES = (
     "MOST",
     "NRF",
     "NAFOSTED",
+    "VINIF",
+    "VAST",
+    "SNSF",
+    "FWO",
+    "FNR",
+    "KAKENHI",
+    "BBSRC",
+    "MRC",
+    "AHRC",
+    "STFC",
+    "UKRI",
+    "Wellcome",
+    "CNRS",
+    "CONACYT",
+    "CAPES",
+    "CNPq",
+    "FAPESP",
 )
-_AGENCY_PREFIX_RE = re.compile(r"\b(?:" + "|".join(_FUNDING_AGENCIES) + r")[\s-]+([A-Za-z0-9][\w.-]*)\b")
+# Separator between the agency and its grant code: whitespace, hyphen, OR a bare dot — the dot is
+# needed for funders whose own citation form has no space at all, e.g. VinIF's
+# "VINIF.2020.DA15". Between that separator and the actual (digit-bearing) grant code, an optional
+# ONE-OR-TWO-LETTER grant-type code may sit with its own separator either side — the Austrian
+# Science Fund's standard citation form is "FWF P 12345" (agency, grant-type letter, space,
+# number): without this, the capture grabbed only "P" (no digit) and stopped at the space,
+# silently missing the number entirely. "FWF P12345" and "FWF-P12345" (no space before the
+# number) still match via the final capture group directly, same as before.
+_AGENCY_PREFIX_RE = re.compile(
+    r"\b(?:" + "|".join(_FUNDING_AGENCIES) + r")[\s.-]+(?:[A-Za-z]{1,2}[\s.-]+)?([A-Za-z0-9][\w.-]*)\b"
+)
 
 # A bare four-digit number ("2024") must never match this rule on its own — it is a year, not a
 # grant — so every alternative below requires either a known agency prefix (above) or an explicit

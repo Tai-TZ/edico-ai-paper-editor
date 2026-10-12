@@ -205,6 +205,56 @@ def test_gitlab_personal_namespace_is_also_flagged():
 # --- extra: findings carry a line and a symbol --------------------------------------------------
 
 
+def test_placeholder_author_with_a_trailing_linebreak_is_not_a_leak():
+    for value in (
+        "Anonymous\\\\",
+        "Anonymous Authors \\\\",
+        "Anonymous\\\\[2ex]",
+        "Anonymous\\\\*",
+        "Anonymous\\newline",
+    ):
+        doc = f"\\author{{{value}}}\n"
+        assert check_anonymity(build_source("main.tex", {"main.tex": doc})) == [], value
+
+
+def test_placeholder_affiliation_with_a_trailing_linebreak_is_not_a_leak():
+    doc = "\\institute{Anonymous\\\\}\n"
+    assert check_anonymity(build_source("main.tex", {"main.tex": doc})) == []
+
+
+def test_a_real_name_with_a_trailing_linebreak_still_leaks():
+    doc = "\\author{Jane Doe\\\\}\n"
+    out = check_anonymity(build_source("main.tex", {"main.tex": doc}))
+    assert "anon.author_populated" in [f.rule for f in out]
+
+
+def test_linebreak_separated_name_and_affiliation_both_appear_in_the_symbol():
+    doc = "\\author{Jane Doe\\\\MIT}\n"
+    out = [f for f in check_anonymity(build_source("main.tex", {"main.tex": doc})) if f.rule == "anon.author_populated"]
+    assert "Jane Doe" in out[0].symbol and "MIT" in out[0].symbol
+
+
+def test_vietnamese_and_european_funder_codes_are_recognised():
+    for text in (
+        "Funded under VINIF.2020.DA15 project.",
+        "Supported by FWF P 12345.",
+        "FWF P12345",
+        "NAFOSTED 103.99-2019.12",
+    ):
+        out = check_anonymity(build_source("main.tex", {"main.tex": text + "\n"}))
+        assert "anon.funding_identifiers" in [f.rule for f in out], text
+
+
+def test_product_names_and_standards_are_not_grant_numbers():
+    for text in (
+        "We used GPT-4 for this.",
+        "Compliant with ISO-9001.",
+        "In 2024 we ran the study.",
+    ):
+        out = check_anonymity(build_source("main.tex", {"main.tex": text + "\n"}))
+        assert "anon.funding_identifiers" not in [f.rule for f in out], text
+
+
 def test_author_finding_reports_file_line_and_symbol():
     out = check_anonymity(build_source("main.tex", {"main.tex": "Intro.\n\\author{Jane Doe}\n"}))
     hit = next(f for f in out if f.rule == "anon.author_populated")
