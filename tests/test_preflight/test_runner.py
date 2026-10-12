@@ -8,7 +8,7 @@ from src.models.preflight_schemas import (
     PreflightReport,
     PreflightRequest,
 )
-from src.services.preflight.catalogue import PREFLIGHT_GROUPS, PREFLIGHT_RULE_IDS, Finding
+from src.services.preflight.catalogue import PREFLIGHT_GROUPS, Finding
 from src.services.preflight.runner import _within_bounds, run_preflight
 
 
@@ -56,21 +56,19 @@ def test_unresolved_includes_suppress_the_cross_file_rules():
 def test_run_preflight_handles_a_document_hitting_every_rule_group_without_crashing():
     """Smoke/crash test, not a registration test -- deliberately renamed from "...is_registered_in_
     the_catalogue" (fix round 1, MINOR 4). ``RULE_SEVERITY[finding.rule]`` at ``runner.py`` raises
-    ``KeyError`` for any rule id the catalogue does not know about, before the loop below ever gets
-    to check ``f.rule in PREFLIGHT_RULE_IDS`` -- so that assertion can only ever observe an id that
-    was already proven registered, by a different mechanism, further up the call stack. What this
-    test actually demonstrates is that ``run_preflight`` does not crash when double-blind, a word
-    limit, a bib file, and ordinary document content are all supplied together, exercising every
-    one of the six rule modules in a single call. Real catalogue-registration coverage lives in
-    ``tests/test_preflight/test_catalogue.py``.
+    ``KeyError`` for any rule id the catalogue does not know about, before any finding this test
+    could inspect is ever returned -- so a loop re-checking registration here would be inert,
+    unable to fail no matter what it finds. What this test actually demonstrates is that
+    ``run_preflight`` does not crash when double-blind, a word limit, a bib file, and ordinary
+    document content are all supplied together, exercising every one of the six rule modules in a
+    single call. Real catalogue-registration coverage lives in
+    ``tests/test_preflight/test_catalogue.py::test_every_rule_has_a_severity``.
     """
     doc = "\\documentclass{IEEEtran}\n\\author{Jane Doe}\n\\linespread{0.9}\n\\ref{x}\n\\label{y}\n"
     rep = run_preflight(
         _req(doc, bib_content="@article{a, title={T}}", profile=PreflightProfile(double_blind=True, word_limit=5))
     )
     assert rep.findings
-    for f in rep.findings:
-        assert f.rule in PREFLIGHT_RULE_IDS
 
 
 def test_findings_are_ordered_critical_first():

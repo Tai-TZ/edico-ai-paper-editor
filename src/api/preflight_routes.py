@@ -1,8 +1,8 @@
 """HTTP endpoint for Submission Preflight — a deterministic, read-only static-analysis report.
 
 Thin by design: authenticate, hand the body straight to the pure runner, return its report. No
-session store, no DB read beyond authentication, no quota call — see
-``.superpowers/sdd/2026-10-11-submission-preflight/rules-dispatch-context.md``.
+session store, no DB read beyond authentication, no quota call — see the design spec, section 4.3
+(``docs/superpowers/specs/2026-10-11-submission-preflight-design.md``).
 """
 
 from __future__ import annotations

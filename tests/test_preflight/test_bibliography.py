@@ -248,15 +248,17 @@ def test_field_at_the_very_start_of_raw_is_found():
     assert "bib.missing_required_field" not in [f.rule for f in out]
 
 
-def test_unbalanced_braces_do_not_hide_a_present_field():
+def test_unparseable_bib_content_reports_nothing_rather_than_everything():
     # This entry's title value opens a brace it never closes, so bibtexparser itself rejects the
     # whole block ("Unexpectedly reached end of file") rather than handing us a parsed entry --
     # verified by hand: parse_bib_entries("@book{b, title={unclosed {brace, ...") returns {}.
-    # With no usable entries at all, check_bibliography takes the pre-existing "no bibliography
-    # supplied" early exit (see the module docstring and test_no_bib_content_reports_nothing_
-    # rather_than_everything above) before our brace-depth scan ever runs. So for *this specific*
-    # flavor of malformed BibTeX, "a present field must not look absent" holds trivially: no
-    # field of any entry is reported as either present or missing, because there is no entry.
+    # With no usable entries at all, check_bibliography takes the same "no bibliography supplied"
+    # early exit as test_no_bib_content_reports_nothing_rather_than_everything above -- not
+    # because the string is empty, but because bibtexparser rejected it outright. This pins that a
+    # malformed-but-non-empty .bib is treated the same as a missing one, not as "every citation is
+    # now missing its entry". It does NOT exercise the brace-depth scan the missing-field check
+    # uses: test_malformed_quoting_does_not_hide_a_present_field_via_the_fallback below is the one
+    # that does, via a bib string bibtexparser can actually parse.
     bib = "@book{b, title={unclosed {brace, publisher={P}, year={2020}}"
     out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{b}\n"}), bib)
     assert out == []

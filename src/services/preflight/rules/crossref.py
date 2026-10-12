@@ -5,8 +5,9 @@ a label in an included file satisfies a ``\\ref`` in the main file) and reports 
 faults: a reference with no matching label, a label defined more than once, a float with no
 label anywhere inside it, and a label nobody ever references.
 
-Suppression on ``unresolved_includes`` is the runner's job, not this module's: see
-``rules-dispatch-context.md``. This rule emits findings unconditionally.
+Suppression on ``unresolved_includes`` is the runner's job, not this module's: see the design
+spec, section 4.3 (``docs/superpowers/specs/2026-10-11-submission-preflight-design.md``). This
+rule emits findings unconditionally.
 """
 
 from __future__ import annotations

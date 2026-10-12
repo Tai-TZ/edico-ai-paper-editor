@@ -5,8 +5,9 @@ against the manuscript's ``.bib`` content (``check_bibliography``): a cite with 
 a BibTeX entry missing a field its type requires, an entry with no DOI and no arXiv ``eprint``, two
 entries that are really the same work, and an entry nobody cites.
 
-Suppression on ``unresolved_includes`` is the runner's job, not this module's: see
-``rules-dispatch-context.md``. This rule emits findings unconditionally.
+Suppression on ``unresolved_includes`` is the runner's job, not this module's: see the design
+spec, section 4.3 (``docs/superpowers/specs/2026-10-11-submission-preflight-design.md``). This
+rule emits findings unconditionally.
 """
 
 from __future__ import annotations
@@ -217,7 +218,7 @@ def check_bibliography(src: PreflightSource, bib_content: str) -> list[Finding]:
             findings.append(Finding(rule="bib.duplicate_entry", symbol=group_key, count=len(keys)))
 
     # bib.uncited_entry — emitted unconditionally; suppression on unresolved_includes is the
-    # runner's job (see rules-dispatch-context.md), not this module's.
+    # runner's job (see the design spec, section 4.3), not this module's.
     for key in entries:
         if key not in cited:
             findings.append(Finding(rule="bib.uncited_entry", symbol=key))
