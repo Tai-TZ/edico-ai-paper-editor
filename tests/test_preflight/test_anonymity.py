@@ -255,6 +255,28 @@ def test_product_names_and_standards_are_not_grant_numbers():
         assert "anon.funding_identifiers" not in [f.rule for f in out], text
 
 
+def test_common_scientific_tokens_are_not_grant_numbers():
+    for text in (
+        "We used the MRC-5 cell line for this experiment.",
+        "The ARC-1234 connector was used.",
+        "Samples were stored in the VAST-2 archive.",
+        "We used GPT-4 for this.",
+        "Compliant with ISO-9001.",
+        "In 2024 we ran the study.",
+    ):
+        out = check_anonymity(build_source("main.tex", {"main.tex": text + "\n"}))
+        assert "anon.funding_identifiers" not in [f.rule for f in out], text
+
+
+def test_removed_agencies_are_still_caught_through_the_grant_phrase_path():
+    for text in (
+        "Funded by the MRC under grant 12345.",
+        "Supported by the ARC, grant no. DP123456.",
+    ):
+        out = check_anonymity(build_source("main.tex", {"main.tex": text + "\n"}))
+        assert "anon.funding_identifiers" in [f.rule for f in out], text
+
+
 def test_author_finding_reports_file_line_and_symbol():
     out = check_anonymity(build_source("main.tex", {"main.tex": "Intro.\n\\author{Jane Doe}\n"}))
     hit = next(f for f in out if f.rule == "anon.author_populated")

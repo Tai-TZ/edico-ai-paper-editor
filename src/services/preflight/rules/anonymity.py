@@ -303,6 +303,18 @@ def _check_acknowledgements_present(src: PreflightSource) -> list[Finding]:
 # "NSF-1234567" — digits only). Kept to a fixed, well-known list of funder abbreviations rather
 # than "any short uppercase word + digit", specifically so this never fires on an unrelated
 # acronym-and-number pairing (a model name like "GPT-4", a standard like "ISO-9001").
+#
+# Deliberately NOT in this list: "MRC", "VAST", "MOST", "ARC". A bare three-letter uppercase token
+# immediately followed by a hyphen and a digit is too common in ordinary scientific prose for this
+# agency-prefix path to treat as a funder on its own evidence -- "MRC-5" is the globally common
+# human lung-fibroblast cell line used throughout virology/vaccine/cell-culture methods sections
+# (nothing to do with the UK Medical Research Council), "ARC-1234" is an everyday part/catalogue
+# number shape, "VAST-2" and "MOST" collide the same way. This agency-prefix path fired a false
+# "anon.funding_identifiers" on routine lab-technique sentences for exactly this reason (fix round
+# 2). These four funders are still reachable through the explicit grant-phrase path below
+# (_GRANT_PHRASE_RE) -- "Funded by the MRC under grant 12345" or "the ARC, grant no. DP123456"
+# still fire, because that path requires an actual grant-phrase ("grant no.", "under grant", ...)
+# and so cannot collide with lab terminology the way a bare agency-prefix match can.
 _FUNDING_AGENCIES = (
     "NSF",
     "DFG",
@@ -315,7 +327,6 @@ _FUNDING_AGENCIES = (
     "EPSRC",
     "JSPS",
     "NSFC",
-    "ARC",
     "CIHR",
     "SSHRC",
     "NSERC",
@@ -324,17 +335,14 @@ _FUNDING_AGENCIES = (
     "DOE",
     "NASA",
     "NWO",
-    "MOST",
     "NRF",
     "NAFOSTED",
     "VINIF",
-    "VAST",
     "SNSF",
     "FWO",
     "FNR",
     "KAKENHI",
     "BBSRC",
-    "MRC",
     "AHRC",
     "STFC",
     "UKRI",
@@ -359,11 +367,24 @@ _AGENCY_PREFIX_RE = re.compile(
 
 # A bare four-digit number ("2024") must never match this rule on its own — it is a year, not a
 # grant — so every alternative below requires either a known agency prefix (above) or an explicit
-# grant-number PHRASE, never a number in isolation.
+# grant-number PHRASE, never a number in isolation. The English phrases capture their trailing code
+# as a group rather than requiring it to START with a digit, because a funder's own grant id is not
+# always digits-first ("grant no. DP123456" -- the Australian Research Council's own citation
+# form) -- the Python side (_grant_phrase_hits) then checks that the captured code contains at
+# least one digit somewhere, same convention as _agency_prefix_hits above, so "under grant review"
+# (no digit at all) still can't match. "under" is folded into the SAME alternative as "grant
+# no."/"grant number" (as an optional prefix) rather than kept as a separate alternative — with two
+# separate alternatives, "supported under Grant No. 12345" matched the "under grant ..." branch
+# first (its "grant" sits to the left of the "no." one), which greedily captured "No." itself as
+# the "code", found no digit in it, and skipped the match — so the actual number was never found at
+# all, since finditer does not re-scan text already consumed by a rejected match. Folding "under"
+# into the main alternative means there is only one place "grant ... <code>" can match, so it always
+# lands on the real trailing number. The Vietnamese phrases have no trailing code to check -- the
+# phrase itself (mã số đề tài / số quyết định) is distinctive enough on its own, unlike "grant" or
+# "under grant" which are ordinary English prose without a number after them.
 _GRANT_PHRASE_RE = re.compile(
-    r"\bgrant\s*(?:no\.?|number)\s*[:#]?\s*\d[\w.-]*"
-    r"|\baward\s*no\.?\s*[:#]?\s*\d[\w.-]*"
-    r"|\bunder\s+grant\s*[:#]?\s*\d[\w.-]*"
+    r"\b(?:under\s+)?grant\s*(?:(?:no\.?|number)\s*[:#]?\s*)?([A-Za-z0-9][\w.-]*)"
+    r"|\baward\s*no\.?\s*[:#]?\s*([A-Za-z0-9][\w.-]*)"
     r"|\bmã\s+số\s+đề\s+tài\b"
     r"|\bma\s+so\s+de\s+tai\b"
     r"|\bsố\s+quyết\s+định\b"
@@ -378,12 +399,24 @@ def _agency_prefix_hits(masked: str) -> Iterator[tuple[int, str]]:
             yield match.start(), " ".join(match.group(0).split())
 
 
+def _grant_phrase_hits(masked: str) -> Iterator[tuple[int, str]]:
+    for match in _GRANT_PHRASE_RE.finditer(masked):
+        # Groups 1-2 are the captured code for the two English phrases ("grant"/"under grant"/
+        # "grant no."/"grant number", and "award no."); exactly one is set when that alternative
+        # matched, both are None for the phrase-only Vietnamese alternatives (nothing to check
+        # there).
+        code = match.group(1) or match.group(2)
+        if code is not None and not any(ch.isdigit() for ch in code):
+            continue
+        yield match.start(), " ".join(match.group(0).split())
+
+
 def _check_funding_identifiers(src: PreflightSource) -> list[Finding]:
     count = 0
     first: tuple[str, int, str] | None = None
     for path, masked in src.iter_masked():
         hits = list(_agency_prefix_hits(masked))
-        hits.extend((match.start(), " ".join(match.group(0).split())) for match in _GRANT_PHRASE_RE.finditer(masked))
+        hits.extend(_grant_phrase_hits(masked))
         for offset, symbol in sorted(hits):
             count += 1
             if first is None:
