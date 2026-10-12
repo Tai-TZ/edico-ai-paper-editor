@@ -180,30 +180,40 @@ def test_exact_ordered_findings_and_counts_for_a_document_hitting_several_groups
 # --- no-content path (fix round 1, ruling A/B/C; "tests the fixed suite must contain" 5-6) ------
 
 
+def _assert_no_content_report(rep: PreflightReport, scenario: str, *, unresolved_includes: list[str]) -> None:
+    """Shared assertions for the four no-content scenarios below.
+
+    Fix round 2: ``_no_content_report`` (``runner.py``) builds a ``PreflightReport`` independently
+    of the normal path, so the normal path's pin (``test_report_is_advisory_and_counts_by_severity``)
+    never exercises it. A reviewer's mutation pass proved the gap: mutant ``counts={}`` (sparse
+    instead of zero-filled) and mutant ``integrity_mode="BROKEN"`` each survived the full suite
+    before this helper existed. ``scenario`` is passed to every assertion so a failure names which
+    of the four callers broke, even though they share one assertion body.
+    """
+    assert isinstance(rep, PreflightReport), scenario
+    assert rep.no_content is True, scenario
+    assert rep.findings == [], scenario
+    assert set(rep.skipped) == set(PREFLIGHT_GROUPS), scenario
+    assert rep.suppressed == [], scenario
+    assert rep.unresolved_includes == unresolved_includes, scenario
+    assert rep.counts == {"critical": 0, "warning": 0, "info": 0}, scenario
+    assert rep.integrity_mode == "comment_only", scenario
+
+
 def test_no_content_when_files_is_empty():
     """An entirely empty ``files`` list means ``main_file`` itself cannot be resolved -- ruling B:
     that is still recorded in ``unresolved_includes`` (the only explanation the panel has left),
     but NOT in ``suppressed``, because the cross-file rules never ran at all here, let alone ran
     and got suppressed."""
     rep = run_preflight(PreflightRequest(main_file="main.tex", files=[]))
-    assert isinstance(rep, PreflightReport)
-    assert rep.no_content is True
-    assert rep.findings == []
-    assert set(rep.skipped) == set(PREFLIGHT_GROUPS)
-    assert rep.suppressed == []
-    assert rep.unresolved_includes == ["main.tex"]
+    _assert_no_content_report(rep, "files_is_empty", unresolved_includes=["main.tex"])
 
 
 def test_no_content_when_main_file_is_absent_from_files():
     """Same shape as an empty ``files`` list -- ``main_file`` simply isn't one of the supplied
     paths, so it is just as unresolved."""
     rep = run_preflight(PreflightRequest(main_file="main.tex", files=[PreflightFile(path="other.tex", content="x")]))
-    assert isinstance(rep, PreflightReport)
-    assert rep.no_content is True
-    assert rep.findings == []
-    assert set(rep.skipped) == set(PREFLIGHT_GROUPS)
-    assert rep.suppressed == []
-    assert rep.unresolved_includes == ["main.tex"]
+    _assert_no_content_report(rep, "main_file_absent_from_files", unresolved_includes=["main.tex"])
 
 
 def test_no_content_when_only_content_is_a_comment():
@@ -219,12 +229,7 @@ def test_no_content_when_only_content_is_a_comment():
     rep = run_preflight(
         PreflightRequest(main_file="main.tex", files=[PreflightFile(path="main.tex", content="% TODO\n")])
     )
-    assert isinstance(rep, PreflightReport)
-    assert rep.no_content is True
-    assert rep.findings == []
-    assert set(rep.skipped) == set(PREFLIGHT_GROUPS)
-    assert rep.suppressed == []
-    assert rep.unresolved_includes == []
+    _assert_no_content_report(rep, "comment_only_content", unresolved_includes=[])
 
 
 def test_no_content_when_only_content_is_whitespace():
@@ -233,12 +238,7 @@ def test_no_content_when_only_content_is_whitespace():
     rep = run_preflight(
         PreflightRequest(main_file="main.tex", files=[PreflightFile(path="main.tex", content="   \n  \n")])
     )
-    assert isinstance(rep, PreflightReport)
-    assert rep.no_content is True
-    assert rep.findings == []
-    assert set(rep.skipped) == set(PREFLIGHT_GROUPS)
-    assert rep.suppressed == []
-    assert rep.unresolved_includes == []
+    _assert_no_content_report(rep, "whitespace_only_content", unresolved_includes=[])
 
 
 def test_no_content_is_false_for_a_document_with_real_content():

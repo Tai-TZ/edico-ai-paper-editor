@@ -48,7 +48,10 @@ class PreflightReport(BaseModel):
     integrity_mode: str = "comment_only"
     findings: list[PreflightFinding] = Field(default_factory=list)
     counts: dict[str, int] = Field(default_factory=dict)  # severity -> count
-    skipped: list[str] = Field(default_factory=list)  # group not run because not declared
+    # group did not run -- either not declared (anon when not double-blind, length when no
+    # word_limit) or, on the no-content path, every group at once, for a different reason
+    # (nothing to analyse, not "undeclared"); `no_content` below is what tells the two apart.
+    skipped: list[str] = Field(default_factory=list)
     suppressed: list[str] = Field(default_factory=list)  # rule disabled due to the 3.5 conflict
     # \input targets absent from the request payload (surfaced so the panel can explain why a
     # rule group's findings may be incomplete — see source.py's build_source).

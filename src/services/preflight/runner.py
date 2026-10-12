@@ -145,7 +145,12 @@ def run_preflight(request: PreflightRequest) -> PreflightReport:
         applicable_double_blind = [
             rule
             for rule in _DOUBLE_BLIND_SUPPRESSED_RULES
-            if _DOUBLE_BLIND_RULE_TO_STATEMENT[rule] in profile.required_statements
+            # .get(rule, ""): defensive only -- both operands are module constants, so a missing
+            # entry can't happen from any request this function receives today. "" is never a
+            # valid RequiredStatement, so a hypothetical future gap here just drops that one rule
+            # from suppression instead of raising, keeping this function's "never raises on an odd
+            # document" docstring promise unconditional rather than contingent on this dict.
+            if _DOUBLE_BLIND_RULE_TO_STATEMENT.get(rule, "") in profile.required_statements
         ]
         suppressed.extend(applicable_double_blind)
         suppressed_rules.update(applicable_double_blind)
