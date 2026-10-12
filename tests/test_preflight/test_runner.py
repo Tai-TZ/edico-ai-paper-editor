@@ -1,4 +1,4 @@
-"""``run_preflight``: skip/suppression bookkeeping, severity, ids, ordering, line bounds."""
+"""``run_preflight``: skip/suppression bookkeeping, severity, ids, ordering, line bounds, no-content."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from src.models.preflight_schemas import (
     PreflightReport,
     PreflightRequest,
 )
-from src.services.preflight.catalogue import PREFLIGHT_RULE_IDS, Finding
+from src.services.preflight.catalogue import PREFLIGHT_GROUPS, PREFLIGHT_RULE_IDS, Finding
 from src.services.preflight.runner import _within_bounds, run_preflight
 
 
@@ -53,7 +53,17 @@ def test_unresolved_includes_suppress_the_cross_file_rules():
     assert "crossref.undefined_ref" not in [f.rule for f in rep.findings]
 
 
-def test_every_emitted_rule_is_registered_in_the_catalogue():
+def test_run_preflight_handles_a_document_hitting_every_rule_group_without_crashing():
+    """Smoke/crash test, not a registration test -- deliberately renamed from "...is_registered_in_
+    the_catalogue" (fix round 1, MINOR 4). ``RULE_SEVERITY[finding.rule]`` at ``runner.py`` raises
+    ``KeyError`` for any rule id the catalogue does not know about, before the loop below ever gets
+    to check ``f.rule in PREFLIGHT_RULE_IDS`` -- so that assertion can only ever observe an id that
+    was already proven registered, by a different mechanism, further up the call stack. What this
+    test actually demonstrates is that ``run_preflight`` does not crash when double-blind, a word
+    limit, a bib file, and ordinary document content are all supplied together, exercising every
+    one of the six rule modules in a single call. Real catalogue-registration coverage lives in
+    ``tests/test_preflight/test_catalogue.py``.
+    """
     doc = "\\documentclass{IEEEtran}\n\\author{Jane Doe}\n\\linespread{0.9}\n\\ref{x}\n\\label{y}\n"
     rep = run_preflight(
         _req(doc, bib_content="@article{a, title={T}}", profile=PreflightProfile(double_blind=True, word_limit=5))
@@ -69,46 +79,194 @@ def test_findings_are_ordered_critical_first():
     assert sev == sorted(sev, key=["critical", "warning", "info"].index)
 
 
-# --- additional coverage -------------------------------------------------------------------------
+# --- exact-value pins (fix round 1, IMPORTANT 1/2 and "tests the fixed suite must contain" 1-4) -
 
 
-def test_empty_payload_reports_nothing_rather_than_erroring():
-    """Robustness: an odd/incomplete request must produce a report, never an exception.
+def test_double_blind_suppression_exact_set():
+    """IMPORTANT 1: membership alone (``"x" in rep.suppressed``) does not catch over-suppression --
+    a mutant that appends an unrelated rule id to the double-blind suppression list still passes a
+    membership check. Pin the full set instead.
 
-    An entirely empty ``files`` list means ``main_file`` itself cannot be resolved by
-    ``build_source`` -- which is just another unresolved include from the runner's point of
-    view, so the cross-file rules (``crossref.undefined_ref``, ``bib.uncited_entry``) go quiet.
-    The always-on statement checks are a different story: there is genuinely no file content
-    anywhere to satisfy a required statement, so correctly flagging all four as missing is the
-    right behaviour, not a bug -- "reports nothing" describes the absence of a crash, not an
-    empty findings list that would misrepresent a document that was never supplied.
+    ``required_statements`` deliberately lists all FIVE statement names, not just "funding" and
+    "author_contributions" -- with ruling D (suppression intersected with what was actually
+    required), a mutant that forges an extra suppression entry for e.g. "coi" is invisible unless
+    "coi" is itself in ``required_statements``. Requiring all five here still pins exactly the same
+    two real suppression ids (there is no third rule id in ``_DOUBLE_BLIND_SUPPRESSED_RULES`` to
+    legitimately suppress), while giving a forged third entry somewhere to actually show up.
     """
+    rep = run_preflight(
+        _req(
+            profile=PreflightProfile(
+                double_blind=True,
+                required_statements=["data_availability", "ethics", "coi", "funding", "author_contributions"],
+            )
+        )
+    )
+    assert sorted(rep.suppressed) == ["statement.author_contributions_missing", "statement.funding_missing"]
+
+
+def test_cross_file_suppression_exact_set():
+    """Same reasoning as above, for the other suppression family: unresolved includes drop exactly
+    ``crossref.undefined_ref`` and ``bib.uncited_entry``, nothing more."""
+    rep = run_preflight(_req("\\input{missing}\n\\ref{ghost}\n", bib_content="@article{a, title={T}}"))
+    assert sorted(rep.suppressed) == ["bib.uncited_entry", "crossref.undefined_ref"]
+
+
+def test_ordinals_are_per_rule_not_a_global_report_wide_counter():
+    """IMPORTANT 2: ``test_ordinals_are_dense_per_rule_with_no_gaps`` below uses an input where all
+    three matching findings belong to the SAME rule, so a global, report-wide ``enumerate`` counter
+    coincidentally produces the same ``:0,:1,:2`` a correct per-rule counter would. This is the
+    reviewer's own demonstration input: six findings, six DIFFERENT rules, so the real per-rule
+    ordinal is ``:0`` for every one of them, while a global counter would instead number them
+    ``:0,:1,:2,:3,:4,:5`` in whatever order they end up in -- a visibly different, and wrong, id
+    list. Verified by hand-running ``run_preflight`` against this input before pinning it here.
+    """
+    rep = run_preflight(_req("\\ref{ghost}\n\\vspace{-3cm}\nx\n"))
+    assert [f.id for f in rep.findings] == [
+        "crossref.undefined_ref:0",
+        "statement.data_availability_missing:0",
+        "statement.ethics_missing:0",
+        "statement.coi_missing:0",
+        "statement.funding_missing:0",
+        "format.large_negative_vspace:0",
+    ]
+
+
+def test_exact_ordered_findings_and_counts_for_a_document_hitting_several_groups():
+    """A single document engineered to hit all six rule groups at once, so one test pins severity
+    lookup, per-rule id assignment, critical-first ordering, AND the stable within-band order
+    together -- MINOR 5's "no test pins the exact ordered findings list for a multi-group document"
+    and the counts half of IMPORTANT 3's bundled test. Verified by hand-running ``run_preflight``
+    against this exact input and comparing the printed ``(severity, id)`` pairs before pinning them
+    here (the "print and compare before trusting a test" convention from task 9's own report).
+
+    The document: an \\documentclass that isn't a plain class (anon.author_populated and
+    format.margin_override's gate both care), a leaking \\author, a compressed \\linespread, an
+    undefined \\ref and an unused \\label, a one-entry bib missing "journal"/"year"/a DOI and never
+    cited, under double-blind review with a word limit low enough to be blown by two words.
+    """
+    doc = "\\documentclass{IEEEtran}\n\\author{Jane Doe}\n\\linespread{0.9}\n\\ref{x}\n\\label{y}\n"
+    rep = run_preflight(
+        _req(
+            doc,
+            bib_content="@article{a, title={T}}",
+            profile=PreflightProfile(
+                double_blind=True,
+                word_limit=1,
+                required_statements=["data_availability", "ethics", "coi", "funding"],
+            ),
+        )
+    )
+    assert [(f.severity, f.id) for f in rep.findings] == [
+        ("critical", "crossref.undefined_ref:0"),
+        ("critical", "format.compressed_leading:0"),
+        ("critical", "anon.author_populated:0"),
+        ("critical", "length.over_limit:0"),
+        ("warning", "bib.missing_required_field:0"),
+        ("warning", "bib.missing_required_field:1"),
+        ("warning", "statement.data_availability_missing:0"),
+        ("warning", "statement.ethics_missing:0"),
+        ("warning", "statement.coi_missing:0"),
+        ("info", "crossref.unused_label:0"),
+        ("info", "bib.missing_doi:0"),
+        ("info", "bib.uncited_entry:0"),
+    ]
+    assert rep.counts == {"critical": 4, "warning": 5, "info": 3}
+    # statement.funding_missing is suppressed (double-blind, "funding" IS required here) -- not a
+    # gap in the pinned list above, so pin it explicitly too.
+    assert rep.suppressed == ["statement.funding_missing"]
+
+
+# --- no-content path (fix round 1, ruling A/B/C; "tests the fixed suite must contain" 5-6) ------
+
+
+def test_no_content_when_files_is_empty():
+    """An entirely empty ``files`` list means ``main_file`` itself cannot be resolved -- ruling B:
+    that is still recorded in ``unresolved_includes`` (the only explanation the panel has left),
+    but NOT in ``suppressed``, because the cross-file rules never ran at all here, let alone ran
+    and got suppressed."""
     rep = run_preflight(PreflightRequest(main_file="main.tex", files=[]))
     assert isinstance(rep, PreflightReport)
+    assert rep.no_content is True
+    assert rep.findings == []
+    assert set(rep.skipped) == set(PREFLIGHT_GROUPS)
+    assert rep.suppressed == []
     assert rep.unresolved_includes == ["main.tex"]
-    assert sorted(rep.suppressed) == ["bib.uncited_entry", "crossref.undefined_ref"]
-    assert set(rep.skipped) == {"anon", "length"}
-    assert [f.rule for f in rep.findings] == [
-        "statement.data_availability_missing",
-        "statement.ethics_missing",
-        "statement.coi_missing",
-        "statement.funding_missing",
-    ]
-    assert rep.counts == {"critical": 0, "warning": 4, "info": 0}
 
-    # main_file simply absent from the supplied files -- same shape, still no exception.
+
+def test_no_content_when_main_file_is_absent_from_files():
+    """Same shape as an empty ``files`` list -- ``main_file`` simply isn't one of the supplied
+    paths, so it is just as unresolved."""
     rep = run_preflight(PreflightRequest(main_file="main.tex", files=[PreflightFile(path="other.tex", content="x")]))
     assert isinstance(rep, PreflightReport)
+    assert rep.no_content is True
+    assert rep.findings == []
+    assert set(rep.skipped) == set(PREFLIGHT_GROUPS)
+    assert rep.suppressed == []
     assert rep.unresolved_includes == ["main.tex"]
 
-    # A file with empty content resolves cleanly.
-    rep = run_preflight(PreflightRequest(main_file="main.tex", files=[PreflightFile(path="main.tex", content="")]))
+
+def test_no_content_when_only_content_is_a_comment():
+    """Ruling A's exact trap case: a file containing only ``% TODO\\n`` has non-empty ``text``, so
+    a literal ``text == ""`` predicate would miss it and fall through to four statement warnings --
+    the fresh-template noise this ruling exists to avoid. The predicate must read ``masked``.
+
+    Unlike the two scenarios above, ``main_file`` here resolves cleanly (its text was supplied and
+    is a real file in ``build_source``'s eyes) -- there is no missing \\input target to report, so
+    ``unresolved_includes`` is correctly empty, not "non-empty for the same reason" as the other
+    two no-content scenarios.
+    """
+    rep = run_preflight(
+        PreflightRequest(main_file="main.tex", files=[PreflightFile(path="main.tex", content="% TODO\n")])
+    )
     assert isinstance(rep, PreflightReport)
+    assert rep.no_content is True
+    assert rep.findings == []
+    assert set(rep.skipped) == set(PREFLIGHT_GROUPS)
+    assert rep.suppressed == []
     assert rep.unresolved_includes == []
 
-    # No profile fields set at all (the bare default).
-    rep = run_preflight(_req("Text.\n"))
+
+def test_no_content_when_only_content_is_whitespace():
+    """Same reasoning as the comment-only case: ``text`` is non-empty, ``masked`` is blank once
+    stripped, and ``main_file`` resolves cleanly so ``unresolved_includes`` stays empty."""
+    rep = run_preflight(
+        PreflightRequest(main_file="main.tex", files=[PreflightFile(path="main.tex", content="   \n  \n")])
+    )
     assert isinstance(rep, PreflightReport)
+    assert rep.no_content is True
+    assert rep.findings == []
+    assert set(rep.skipped) == set(PREFLIGHT_GROUPS)
+    assert rep.suppressed == []
+    assert rep.unresolved_includes == []
+
+
+def test_no_content_is_false_for_a_document_with_real_content():
+    rep = run_preflight(_req("Text.\n"))
+    assert rep.no_content is False
+
+
+# --- ruling D: double-blind suppression intersected with required_statements --------------------
+
+
+def test_double_blind_suppression_records_nothing_when_no_statement_is_required():
+    """Ruling D: recording ``statement.funding_missing`` as suppressed when the profile's
+    ``required_statements`` never asked for a funding statement in the first place is a small lie
+    the panel would have to render. With an empty ``required_statements``, neither suppressed id
+    is recorded."""
+    rep = run_preflight(_req(profile=PreflightProfile(double_blind=True, required_statements=[])))
+    assert rep.suppressed == []
+
+
+def test_double_blind_suppression_records_only_the_required_statement():
+    """With only "funding" required, only ``statement.funding_missing`` is recorded as suppressed
+    -- ``statement.author_contributions_missing`` is not, because that statement was never
+    required here and so was never a candidate finding to suppress in the first place."""
+    rep = run_preflight(_req(profile=PreflightProfile(double_blind=True, required_statements=["funding"])))
+    assert rep.suppressed == ["statement.funding_missing"]
+
+
+# --- additional coverage -------------------------------------------------------------------------
 
 
 def test_always_on_groups_are_never_skipped():

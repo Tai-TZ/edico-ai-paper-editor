@@ -30,20 +30,35 @@ place owns it instead of it being scattered (and duplicated, and drifted) across
   (the frontend's scroll helper does not clamp past end-of-file, so a bad line would scroll to the
   bottom and highlight nothing). ``line is None`` is legitimate — ``check_statements`` and
   ``check_length`` both emit it for findings with no single meaningful location — and always
-  passes through untouched.
+  passes through untouched. As of fix round 1, this filter is provably unreachable through all
+  six rule modules as they stand today (every located finding's ``line`` comes from
+  ``src.locate(path, offset)`` on a real offset into that same file's own text, which can never
+  exceed that file's own real line count) — it is pure insurance against a future rule module
+  computing a line number wrong, not something any current input can exercise end-to-end.
+
+Fix round 1 added one more cross-cutting policy, the **no-content path**: when ``request.files``
+is empty, ``main_file`` is absent from it, or every resolved file is blank or comment-only once
+masked, there is nothing to analyse at all. That is different from a group being merely
+undeclared (``skipped``) — it means no rule group actually examined any content — so it gets its
+own field, ``report.no_content``, and short-circuits everything else: no findings, every group in
+``skipped``, and ``suppressed`` left empty (a group that never ran cannot also have had a rule
+suppressed out of it — that would tell the panel two contradictory things about the same group).
+``unresolved_includes`` is still populated when that is *why* there was nothing (an empty
+``files`` list or a missing ``main_file``), since it becomes the only explanation the panel has
+for an entirely empty report.
 """
 
 from __future__ import annotations
 
 from src.models.preflight_schemas import PreflightFinding, PreflightReport, PreflightRequest
-from src.services.preflight.catalogue import RULE_SEVERITY, Finding
+from src.services.preflight.catalogue import PREFLIGHT_GROUPS, RULE_SEVERITY, Finding
 from src.services.preflight.rules.anonymity import check_anonymity
 from src.services.preflight.rules.bibliography import check_bibliography
 from src.services.preflight.rules.crossref import check_crossref
 from src.services.preflight.rules.formatting import check_formatting
 from src.services.preflight.rules.length import check_length
 from src.services.preflight.rules.statements import check_statements
-from src.services.preflight.source import build_source
+from src.services.preflight.source import PreflightSource, build_source
 
 # Severity sort key — critical first, then warning, then info.
 _SEVERITY_ORDER: tuple[str, ...] = ("critical", "warning", "info")
@@ -58,6 +73,27 @@ _DOUBLE_BLIND_SUPPRESSED_RULES: tuple[str, ...] = (
     "statement.author_contributions_missing",
 )
 
+# rule id -> the `required_statements` entry it corresponds to. Fix round 1, ruling D: the
+# double-blind suppression above is only recorded for a rule whose statement the profile actually
+# required -- recording `statement.funding_missing` as suppressed when `required_statements` never
+# asked for a funding statement would be a small lie the panel has to render.
+_DOUBLE_BLIND_RULE_TO_STATEMENT: dict[str, str] = {
+    "statement.funding_missing": "funding",
+    "statement.author_contributions_missing": "author_contributions",
+}
+
+
+def _no_content_report(src: PreflightSource) -> PreflightReport:
+    """The fix-round-1 no-content path: nothing to analyse, so nothing ran and nothing is suppressed."""
+    return PreflightReport(
+        findings=[],
+        counts={severity: 0 for severity in _SEVERITY_ORDER},
+        skipped=list(PREFLIGHT_GROUPS),
+        suppressed=[],
+        unresolved_includes=list(src.unresolved_includes),
+        no_content=True,
+    )
+
 
 def run_preflight(request: PreflightRequest) -> PreflightReport:
     """Run every applicable rule group over ``request`` and assemble one advisory report.
@@ -70,6 +106,14 @@ def run_preflight(request: PreflightRequest) -> PreflightReport:
     files = {file.path: file.content for file in request.files}
     src = build_source(request.main_file, files)
     profile = request.profile
+
+    # No-content path (fix round 1, ruling A/B/C) -- checked on `src`, i.e. AFTER build_source,
+    # not before it: `unresolved_includes` still needs to come out of `src` even when there is
+    # nothing else to report. The predicate reads `masked`, never `text`: a file containing only
+    # "% TODO\n" has non-empty `text` but is entirely comment once masked, and must take this path
+    # rather than falling through to four statement warnings on a blank template.
+    if not src.files or all(not f.masked.strip() for f in src.files):
+        return _no_content_report(src)
 
     raw: list[Finding] = []
     skipped: list[str] = []
@@ -98,8 +142,13 @@ def run_preflight(request: PreflightRequest) -> PreflightReport:
         suppressed.extend(_CROSS_FILE_SUPPRESSED_RULES)
         suppressed_rules.update(_CROSS_FILE_SUPPRESSED_RULES)
     if profile.double_blind:
-        suppressed.extend(_DOUBLE_BLIND_SUPPRESSED_RULES)
-        suppressed_rules.update(_DOUBLE_BLIND_SUPPRESSED_RULES)
+        applicable_double_blind = [
+            rule
+            for rule in _DOUBLE_BLIND_SUPPRESSED_RULES
+            if _DOUBLE_BLIND_RULE_TO_STATEMENT[rule] in profile.required_statements
+        ]
+        suppressed.extend(applicable_double_blind)
+        suppressed_rules.update(applicable_double_blind)
 
     # A file's real line count, in the same 1-based convention as PreflightSource.locate: the
     # number of "\n" in its original text, plus one.
@@ -141,6 +190,7 @@ def run_preflight(request: PreflightRequest) -> PreflightReport:
         skipped=skipped,
         suppressed=suppressed,
         unresolved_includes=list(src.unresolved_includes),
+        no_content=False,
     )
 
 

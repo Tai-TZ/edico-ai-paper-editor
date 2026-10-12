@@ -53,6 +53,11 @@ class PreflightReport(BaseModel):
     # \input targets absent from the request payload (surfaced so the panel can explain why a
     # rule group's findings may be incomplete — see source.py's build_source).
     unresolved_includes: list[str] = Field(default_factory=list)
+    # True when there was nothing to analyse at all (no files, or every resolved file is blank/
+    # comment-only once masked) -- see runner.py's "no-content path". Deliberately a separate
+    # field from `skipped`: `skipped` already means "not declared" (anon/length), and overloading
+    # it to also mean "nothing to analyse" would leave the panel unable to tell the two apart.
+    no_content: bool = False
 
 
 class PreflightFile(BaseModel):
