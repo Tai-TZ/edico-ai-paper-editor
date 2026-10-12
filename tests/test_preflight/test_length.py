@@ -116,3 +116,27 @@ def test_over_limit_and_near_limit_never_fire_together():
         doc = "\\begin{document}\n" + "word " * word_count + "\n\\end{document}\n"
         out = check_length(_src(doc), 100)
         assert len(out) <= 1
+
+
+# --- fix round 1: unpaired, unescaped "$" must not swallow prose as math -----------------------
+
+
+def test_unpaired_currency_dollars_do_not_swallow_prose():
+    doc = "\\begin{document}\nPrice is \\$100. Later it cost \\$200 more here words words words.\n\\end{document}\n"
+    # escaped form, already correct -- pin it so a refactor cannot regress it
+    assert count_body_words(_src(doc)) == 12
+
+
+def test_bare_currency_dollars_do_not_swallow_prose():
+    doc = "\\begin{document}\nPrice is $100. Later it cost $200 more here words words words.\n\\end{document}\n"
+    assert count_body_words(_src(doc)) == 12
+
+
+def test_real_inline_math_is_still_stripped():
+    doc = "\\begin{document}\nValue $x + y = z$ holds.\n\\end{document}\n"
+    assert count_body_words(_src(doc)) == 2
+
+
+def test_display_math_still_stripped():
+    doc = "\\begin{document}\nBefore $$a + b = c$$ after.\n\\end{document}\n"
+    assert count_body_words(_src(doc)) == 2

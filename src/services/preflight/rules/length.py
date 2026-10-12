@@ -81,8 +81,27 @@ _MATH_ENV_RE = re.compile(r"\\begin\{(equation\*?|align\*?|gather|multline)\}.*?
 _DISPLAY_DOLLAR_MATH_RE = re.compile(r"\$\$.*?\$\$", re.DOTALL)
 # Inline math $...$. The dollar on either side must not itself be escaped (\$ is a literal dollar
 # sign, not a delimiter); inside the span, an escaped character (\$, \%, ...) is skipped as a unit
-# so it can never be misread as the closing delimiter.
-_INLINE_DOLLAR_MATH_RE = re.compile(r"(?<!\\)\$(?:[^$\\]|\\.)*?(?<!\\)\$")
+# so it can never be misread as the closing delimiter. The inner content is captured (group 1) so
+# _strip_inline_dollar_math below can decide, per span, whether it actually looks like math.
+#
+# KNOWN LIMITATION, DELIBERATE DIRECTION: two genuinely unpaired, unescaped "$" signs used as plain
+# currency (e.g. "Price is $100. Later it cost $200 more.") are textually identical to "$math$" --
+# no regex can tell the two apart in general. Because this module's whole bias is to never
+# undercount (see module docstring), a candidate span is only treated as math -- and stripped --
+# when BOTH:
+#   (1) its inner content has no ". " (a period followed by whitespace): real inline math
+#       essentially never contains a sentence boundary; prose sitting between two unrelated
+#       currency amounts usually does.
+#   (2) its inner content is no longer than _INLINE_MATH_MAX_CHARS: real inline math is short; a
+#       long run between two "$" is far more likely to be prose with two unrelated "$" mentions.
+# A span that fails either check is left COMPLETELY UNTOUCHED (not stripped), so its words stay in
+# the count. Do not "simplify" this back to an unconditional strip-everything-between-two-"$": that
+# reintroduces a silent undercount, the one direction this rule must never lean.
+_INLINE_DOLLAR_MATH_RE = re.compile(r"(?<!\\)\$((?:[^$\\]|\\.)*?)(?<!\\)\$")
+
+# Generous for real inline math (e.g. "\hat{\theta}_i^{(k)} \sim \mathcal{N}(0,1)" is 38 chars,
+# well under this) while still rejecting multi-sentence prose caught between two unrelated "$"s.
+_INLINE_MATH_MAX_CHARS = 80
 # \(...\) and \[...\] -- LaTeX's other two math delimiter pairs.
 _PAREN_MATH_RE = re.compile(r"\\\(.*?\\\)", re.DOTALL)
 _BRACKET_MATH_RE = re.compile(r"\\\[.*?\\\]", re.DOTALL)
@@ -113,12 +132,40 @@ def _drop_bibliography_tail(body: str) -> str:
     return body[: match.start()]
 
 
+def _looks_like_math(inner: str) -> bool:
+    """Heuristic gate for one candidate ``$...$`` span's inner content: see the "KNOWN LIMITATION"
+    comment on ``_INLINE_DOLLAR_MATH_RE`` above. Both conditions must hold for the span to be
+    treated as math; when in doubt this returns ``False`` (leave it as prose), never ``True``."""
+    return ". " not in inner and len(inner) <= _INLINE_MATH_MAX_CHARS
+
+
+def _strip_inline_dollar_math(text: str) -> str:
+    """Apply ``_INLINE_DOLLAR_MATH_RE``, but only blank a span that ``_looks_like_math`` accepts.
+
+    A rejected span keeps its inner text byte-for-byte, but its two delimiting ``$`` are escaped
+    to ``\\$`` rather than left raw. Leaving them raw is not enough: ``_to_plain_text`` below hands
+    the result to pylatexenc, which does its *own* unpaired ``$`` scanning downstream and would
+    re-pair this span's two "survived" dollars as a math span anyway (verified empirically --
+    without the escape, "Price is $100. Later it cost $200..." comes back from pylatexenc as
+    "...it cost200..." with "cost" and "200" fused, because pylatexenc's math-to-text renderer
+    trims the whitespace it thinks is inside the math node). Escaping is safe here because every
+    ``$`` inside the captured inner text is already guaranteed escaped by the outer regex (its
+    character class excludes a bare ``$``), so only the two delimiters are ever un-escaped."""
+
+    def _replace(match: re.Match[str]) -> str:
+        if _looks_like_math(match.group(1)):
+            return " "
+        return "\\$" + match.group(1) + "\\$"
+
+    return _INLINE_DOLLAR_MATH_RE.sub(_replace, text)
+
+
 def _strip_math(text: str) -> str:
     """Blank every math span to a single space (not an empty string) so two words that sat on
     either side of it, e.g. ``"holds.$x$next"``, never fuse into one token."""
     text = _MATH_ENV_RE.sub(" ", text)
     text = _DISPLAY_DOLLAR_MATH_RE.sub(" ", text)
-    text = _INLINE_DOLLAR_MATH_RE.sub(" ", text)
+    text = _strip_inline_dollar_math(text)
     text = _PAREN_MATH_RE.sub(" ", text)
     text = _BRACKET_MATH_RE.sub(" ", text)
     return text
