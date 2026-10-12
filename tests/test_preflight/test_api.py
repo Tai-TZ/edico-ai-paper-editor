@@ -3,40 +3,77 @@ report shape.
 
 ``get_current_user`` requires a live DB connection before it even looks at the Authorization
 header (``src/api/deps.py``'s ``_require_db``), and ``tests/conftest.py`` strips
-``DATABASE_URL``/``DIRECT_DATABASE_URL`` before importing the app, so there is no way to
-authenticate for real through the plain ``client`` fixture: every call would 503 before FastAPI
-even validates the request body, regardless of payload. This handler has nothing left to check
-once the caller is known (no session store, no ownership lookup — the whole body is one call to
-``run_preflight``), so these tests override the dependency with a stand-in, un-persisted user
-instead of spinning up a throwaway database. They prove the *contract* this endpoint owns —
-status codes, payload validation, response shape — not the auth gate.
+``DATABASE_URL``/``DIRECT_DATABASE_URL`` before importing the app. Rather than overriding the
+dependency (no precedent anywhere in this repo — ``grep -rn dependency_overrides tests/`` has no
+other hits), these tests follow the repo's actual pattern for an endpoint gated only by
+``Depends(get_current_user)`` (see ``tests/test_api/test_profile.py``, which tests the
+identically-shaped ``GET /users/me/profile``): a throwaway sqlite database brought up via
+``monkeypatch`` + ``init_db()``, and a real bearer token obtained through
+``register_user_via_verification`` so requests exercise the real dependency end to end.
 """
 
 from __future__ import annotations
 
-import uuid
+import os
 
 import pytest
 
-from src.api.deps import get_current_user
-from src.db.models import User
-from src.main import app
-
-_FAKE_USER = User(id=uuid.uuid4(), email="preflight-test@example.com", full_name="Preflight Tester")
+from src.config import get_settings
+from src.db.engine import init_db, reset_db_state
+from tests.test_api.auth_helpers import register_user_via_verification
 
 
-@pytest.fixture(autouse=True)
-def _authenticated():
-    """Stand in for ``get_current_user`` so requests reach the handler instead of 503ing on the DB."""
-    app.dependency_overrides[get_current_user] = lambda: _FAKE_USER
+@pytest.fixture
+def preflight_db(monkeypatch):
+    db_path = os.path.join(os.path.dirname(__file__), "_test_preflight.db")
+    if os.path.exists(db_path):
+        os.remove(db_path)
+    url = f"sqlite:///{db_path}"
+    monkeypatch.setenv("DATABASE_URL", url)
+    monkeypatch.setenv("DIRECT_DATABASE_URL", url)
+    monkeypatch.setenv("AUTH_SECRET_KEY", "test-secret-key-for-jwt-signing-32chars")
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("SMTP_HOST", "")
+    monkeypatch.setenv("SMTP_FROM", "")
+    monkeypatch.setenv("SMTP_USER", "")
+    monkeypatch.setenv("SMTP_PASSWORD", "")
+    get_settings.cache_clear()
+    reset_db_state()
+    init_db()
     yield
-    app.dependency_overrides.pop(get_current_user, None)
+    reset_db_state()
+    get_settings.cache_clear()
+    # Known trap (tests/test_api/test_ai_disclosure_api.py, tests/test_db/conftest.py): init_db()
+    # plus a real login can leave the module-global session store bound to a DatabaseSessionStore
+    # pointing at the sqlite file we are about to delete, which poisons later tests. This endpoint
+    # never touches the session store itself, but clear the global anyway so teardown order can't
+    # matter.
+    import src.services.sessions as sessions_mod
+
+    sessions_mod._store = None
+    if os.path.exists(db_path):
+        try:
+            os.remove(db_path)
+        except OSError:
+            pass
+
+
+async def _auth_headers(client) -> dict[str, str]:
+    body = await register_user_via_verification(
+        client,
+        name="Preflight Tester",
+        email="preflight-test@example.com",
+        password="SecurePass1",
+    )
+    return {"Authorization": f"Bearer {body['access_token']}"}
 
 
 @pytest.mark.asyncio
-async def test_run_returns_a_report(client):
+async def test_run_returns_a_report(client, preflight_db):
+    headers = await _auth_headers(client)
     res = await client.post(
         "/api/v1/preflight/run",
+        headers=headers,
         json={
             "main_file": "main.tex",
             "files": [{"path": "main.tex", "content": "See \\ref{ghost}.\n"}],
@@ -49,27 +86,34 @@ async def test_run_returns_a_report(client):
 
 
 @pytest.mark.asyncio
-async def test_unsafe_main_file_is_rejected(client):
-    res = await client.post("/api/v1/preflight/run", json={"main_file": "../../etc/passwd", "files": []})
+async def test_unsafe_main_file_is_rejected(client, preflight_db):
+    headers = await _auth_headers(client)
+    res = await client.post(
+        "/api/v1/preflight/run",
+        headers=headers,
+        json={"main_file": "../../etc/passwd", "files": []},
+    )
     assert res.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_too_many_files_is_rejected(client):
+async def test_too_many_files_is_rejected(client, preflight_db):
+    headers = await _auth_headers(client)
     files = [{"path": f"f{i}.tex", "content": ""} for i in range(65)]
-    res = await client.post("/api/v1/preflight/run", json={"files": files})
+    res = await client.post("/api/v1/preflight/run", headers=headers, json={"files": files})
     assert res.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_empty_payload_reports_nothing_rather_than_erroring(client):
-    res = await client.post("/api/v1/preflight/run", json={"files": []})
+async def test_empty_payload_reports_nothing_rather_than_erroring(client, preflight_db):
+    headers = await _auth_headers(client)
+    res = await client.post("/api/v1/preflight/run", headers=headers, json={"files": []})
     assert res.status_code == 200
     assert res.json()["findings"] == []
 
 
 @pytest.mark.asyncio
-async def test_main_file_absent_from_nonempty_files_is_rejected(client):
+async def test_main_file_absent_from_nonempty_files_is_rejected(client, preflight_db):
     """``files`` is non-empty but none of its paths match ``main_file`` — a wrong ``main_file``,
     not "no content".
 
@@ -79,11 +123,42 @@ async def test_main_file_absent_from_nonempty_files_is_rejected(client):
     empty report would hide a client bug behind a good-looking response, so the handler rejects it
     at the boundary instead of asking the runner to paper over it.
     """
+    headers = await _auth_headers(client)
     res = await client.post(
         "/api/v1/preflight/run",
+        headers=headers,
         json={
             "main_file": "main.tex",
             "files": [{"path": "other.tex", "content": "See \\ref{ghost}.\n"}],
         },
     )
     assert res.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_run_requires_authentication(client, preflight_db):
+    res = await client.post(
+        "/api/v1/preflight/run",
+        json={
+            "main_file": "main.tex",
+            "files": [{"path": "main.tex", "content": "See \\ref{ghost}.\n"}],
+        },
+    )
+    assert res.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_run_rejects_malformed_token(client, preflight_db):
+    """``decode_access_token`` swallows every ``jwt.PyJWTError`` and returns ``None``, so expired,
+    malformed, and wrong-signature tokens are indistinguishable at the call site and all produce
+    the same response — this one malformed-token case covers that whole class.
+    """
+    res = await client.post(
+        "/api/v1/preflight/run",
+        headers={"Authorization": "Bearer not-a-real-token"},
+        json={
+            "main_file": "main.tex",
+            "files": [{"path": "main.tex", "content": "See \\ref{ghost}.\n"}],
+        },
+    )
+    assert res.status_code == 401
