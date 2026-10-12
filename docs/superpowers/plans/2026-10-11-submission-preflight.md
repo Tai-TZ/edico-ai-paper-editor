@@ -217,7 +217,7 @@ Expected: FAIL — cannot import `PREFLIGHT_RULE_IDS`
 
 - [ ] **Step 3: Implement `catalogue.py` and `src/models/preflight_schemas.py`**
 
-Take the 26 rule ids and their severities verbatim from spec §3; the `critical` set is pinned by the test above. Models are copied from spec §4.2/§4.3 as written.
+Take the 29 rule ids and their severities verbatim from spec §3; the `critical` set is pinned by the test above. Models are copied from spec §4.2/§4.3 as written.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
