@@ -47,7 +47,9 @@ The nine rules, each a short independent scan:
   grant-number phrase (``Grant No. 12345``, ``grant number 12345``, ``award no. 12345``, ``under
   grant 12345``), including the Vietnamese ``mã số đề tài`` / ``số quyết định`` forms, accented and
   unaccented. A bare four-digit number is a year, not a grant, and must never fire this rule on
-  its own — see the comment on ``_AGENCY_PREFIX_RE`` and ``_GRANT_PHRASE_RE``.
+  its own; a code that is nothing but a short decimal fraction (``0.05``) is a metric threshold,
+  not a grant, and is excluded on the agency-prefix path — see the comments on
+  ``_AGENCY_PREFIX_RE``, ``_BARE_DECIMAL_CODE_RE``, and ``_GRANT_PHRASE_RE``.
 
 - ``anon.self_reference`` (``info``): a temporal back-reference to the authors' own earlier
   publication ("our previous work", "we previously showed"), English and Vietnamese. The signal is
@@ -329,6 +331,16 @@ def _check_acknowledgements_present(src: PreflightSource) -> list[Finding]:
 # id is a bare one-to-four-digit number with nothing after it. Requiring the trailing letter
 # segment is what separates "ERC-2019-ADG" from "ERC-20"/"ERC-721"/"ERC-1155" -- none of the token
 # ids have (or could sensibly gain) a letter segment after their number.
+#
+# Also NOT in this list (fix round 4): "FNR". Luxembourg's Fonds National de la Recherche shares
+# its abbreviation with "False Negative Rate", a routine ML/statistics metric that in ordinary
+# prose is immediately followed by its value -- "The FNR 0.05 threshold was used." and "FNR-0.95
+# is the achieved operating point." are normal sentences in this product's own target corpus, and
+# both fired this rule. FNR stays reachable through the explicit grant-phrase path below ("Funded
+# by the FNR under grant 12345"), same as MRC/VAST/MOST/ARC. The GENERAL guard for this whole
+# collision class is _BARE_DECIMAL_CODE_RE further down -- it stops "<any agency> <decimal>"
+# regardless of which abbreviation leads; removing FNR additionally covers the forms where the
+# token after it is not a decimal at all.
 _FUNDING_AGENCIES = (
     "NSF",
     "DFG",
@@ -353,7 +365,6 @@ _FUNDING_AGENCIES = (
     "VINIF",
     "SNSF",
     "FWO",
-    "FNR",
     "KAKENHI",
     "BBSRC",
     "AHRC",
@@ -377,6 +388,19 @@ _FUNDING_AGENCIES = (
 _AGENCY_PREFIX_RE = re.compile(
     r"\b(?:" + "|".join(_FUNDING_AGENCIES) + r")[\s.-]+(?:[A-Za-z]{1,2}[\s.-]+)?([A-Za-z0-9][\w.-]*)\b"
 )
+
+# A code that is ENTIRELY a short decimal fraction ("0.05", "0.95", "1.0", "100.5") -- i.e. a
+# measurement, not an identifier. Applied to the captured code on the agency-prefix path above
+# (fix round 4). This is the GENERAL guard for the collision class that produced three separate
+# incidents (MRC-5, ERC-20, FNR 0.05): a short uppercase funder abbreviation standing next to a
+# number is weak evidence, and in an ML paper the number next to a three-letter metric name is
+# almost always a threshold. No real grant code is a bare two-or-three-digit decimal and nothing
+# else, while "FNR 0.05", "NSF 0.05", "ANR 0.01" all are ordinary sentences the moment the
+# abbreviation does double duty. Deliberately anchored on BOTH ends -- "entirely", not "contains"
+# -- because real codes DO contain decimals: NAFOSTED's own form "103.99-2019.12" and VinIF's
+# "VINIF.2020.DA15" (captured code "2020.DA15") must keep firing, and both do, since neither is a
+# bare decimal from end to end.
+_BARE_DECIMAL_CODE_RE = re.compile(r"^\d{1,3}\.\d{1,3}$")
 
 # ERC's OWN pattern (fix round 3), stricter than the generic agency-prefix path above for exactly
 # the reason "ERC" is no longer in _FUNDING_AGENCIES: a real European Research Council grant code
@@ -428,6 +452,15 @@ _GRANT_PHRASE_RE = re.compile(
 def _agency_prefix_hits(masked: str) -> Iterator[tuple[int, str]]:
     for match in _AGENCY_PREFIX_RE.finditer(masked):
         code = match.group(1)
+        # Decimal guard (fix round 4), applied BEFORE the length/digit floor below: a code that is
+        # nothing but a short decimal fraction is a metric value, not a grant id. The floor alone
+        # does not stop these -- "0.05" is exactly 4 characters and contains digits, so it clears
+        # it. Scoped to this agency-prefix path and not to _grant_phrase_hits: that path's evidence
+        # is an explicit "grant no." / "under grant" / "award no." phrase, which is not something
+        # that stands in front of a reported metric in ordinary prose, so there is no collision
+        # there to guard against and no reason to trade away its recall.
+        if _BARE_DECIMAL_CODE_RE.match(code):
+            continue
         # Generic floor (fix round 3): the captured code must be at least 4 characters AND contain
         # a digit. This is what stops this rule from being fixed one collision at a time -- it
         # kills "NRF-2" (the Nrf2 redox-biology pathway, written hyphenated in all caps: code "2",

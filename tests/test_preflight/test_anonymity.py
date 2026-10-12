@@ -305,6 +305,32 @@ def test_real_grant_codes_still_fire():
         assert "anon.funding_identifiers" in [f.rule for f in out], text
 
 
+def test_metric_thresholds_are_not_grant_numbers():
+    for text in (
+        "The FNR 0.05 threshold was used.",
+        "FNR-0.95 is the achieved operating point.",
+        "We report FPR 0.01 and TPR 0.99.",
+        "The NSF 0.05 significance level was applied.",
+    ):
+        out = check_anonymity(build_source("main.tex", {"main.tex": text + "\n"}))
+        assert "anon.funding_identifiers" not in [f.rule for f in out], text
+
+
+def test_real_grant_codes_survive_the_decimal_guard():
+    for text in (
+        "NSF-1234567",
+        "DFG 123456",
+        "ERC-2019-ADG",
+        "NRF-2021R1A2C1",
+        "Funded under VINIF.2020.DA15 project.",
+        "Supported by FWF P 12345.",
+        "NAFOSTED 103.99-2019.12",
+        "Funded by the FNR under grant 12345.",
+    ):
+        out = check_anonymity(build_source("main.tex", {"main.tex": text + "\n"}))
+        assert "anon.funding_identifiers" in [f.rule for f in out], text
+
+
 def test_author_finding_reports_file_line_and_symbol():
     out = check_anonymity(build_source("main.tex", {"main.tex": "Intro.\n\\author{Jane Doe}\n"}))
     hit = next(f for f in out if f.rule == "anon.author_populated")
