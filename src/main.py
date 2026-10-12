@@ -13,6 +13,7 @@ from src.api.defense_routes import router as defense_router
 from src.api.health_routes import router as health_router
 from src.api.import_routes import router as import_router
 from src.api.paper_routes import router as papers_router
+from src.api.preflight_routes import router as preflight_router
 from src.api.profile_routes import router as profile_router
 from src.api.review_routes import router as review_router
 from src.api.routes import router
@@ -105,6 +106,7 @@ app.include_router(review_router, prefix="/api/v1")
 app.include_router(template_router, prefix="/api/v1")
 app.include_router(billing_router, prefix="/api/v1")
 app.include_router(import_router, prefix="/api/v1")
+app.include_router(preflight_router, prefix="/api/v1")
 
 if settings.inngest_serve_enabled():
     inngest.fast_api.serve(app, inngest_client, INNGEST_FUNCTIONS)
