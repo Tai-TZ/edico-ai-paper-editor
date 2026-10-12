@@ -33,4 +33,5 @@ export type PendingEdit = {
   sourceFingerprint?: string;
 };
 
-export type ToolsTab = "info" | "versions" | "citations" | "logic" | "structure" | "peerReview";
+export type ToolsTab =
+  "info" | "versions" | "citations" | "logic" | "structure" | "peerReview" | "preflight";

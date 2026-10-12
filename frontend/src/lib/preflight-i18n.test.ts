@@ -34,4 +34,19 @@ describe("preflightCopy", () => {
     expect(vi).toMatch(/ước tính/i);
     expect(vi).toMatch(/khác nhau/i);
   });
+
+  it("warns about a fresh-from-template draft in both locales (design §7)", () => {
+    // A paper just created from a template is almost all `% TODO` placeholders with no real
+    // content — the panel must say so instead of silently listing findings against a document
+    // the author hasn't written yet.
+    const en = preflightCopy("en").placeholderTemplate;
+    expect(en.trim()).not.toBe("");
+    expect(en).toMatch(/template/i);
+
+    const vi = preflightCopy("vi").placeholderTemplate;
+    expect(vi.trim()).not.toBe("");
+    expect(vi).toMatch(/mẫu/i);
+
+    expect(en).not.toBe(vi);
+  });
 });

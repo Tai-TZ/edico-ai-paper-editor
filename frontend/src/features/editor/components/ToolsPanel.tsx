@@ -9,14 +9,21 @@ import { StructureSuggestionsPanel } from "@/components/editor/structure-suggest
 import { Switch } from "@/components/ui/switch";
 import { verifyCitations, type LogicAuditReport, type RevisionRecord } from "@/lib/api/academic";
 import type { LLMProvider } from "@/lib/api/academic";
+import type {
+  PreflightFinding,
+  PreflightProfileInput,
+  PreflightReport,
+} from "@/lib/api/preflight-api";
 import { editorCopy, revisionActionLabel, translateCitationSummary } from "@/lib/editor-i18n";
 import { peerReviewCopy } from "@/lib/peer-review-i18n";
+import { preflightCopy } from "@/lib/preflight-i18n";
 import { buildCitationFixPrompt } from "@/lib/citation-prompts";
 import { formatTimeAgo, parseApiTimestamp } from "@/lib/project-store";
 import type { LogicAuditMode, LogicAuditScope } from "@/lib/logic-audit";
 import type { StructureSuggestion } from "@/lib/structure-suggestions";
 import { computeProjectStats, countDiffStats } from "../lib/editor-project-stats";
 import type { ToolsTab } from "../types";
+import { PreflightPanel } from "./PreflightPanel";
 
 export const ToolsPanel = memo(function ToolsPanel({
   latex,
@@ -50,6 +57,14 @@ export const ToolsPanel = memo(function ToolsPanel({
   onClose,
   llmProvider,
   llmModel,
+  preflightReport,
+  preflightLoading = false,
+  preflightError = null,
+  preflightProfile,
+  onPreflightProfileChange,
+  onRunPreflight,
+  onJumpToPreflightFinding,
+  canJumpToPreflightFinding,
 }: {
   latex: string;
   projectId: string;
@@ -82,6 +97,14 @@ export const ToolsPanel = memo(function ToolsPanel({
   onClose: () => void;
   llmProvider?: LLMProvider;
   llmModel?: string;
+  preflightReport: PreflightReport | null;
+  preflightLoading?: boolean;
+  preflightError?: string | null;
+  preflightProfile: PreflightProfileInput;
+  onPreflightProfileChange: (profile: PreflightProfileInput) => void;
+  onRunPreflight: () => void;
+  onJumpToPreflightFinding: (finding: PreflightFinding) => void;
+  canJumpToPreflightFinding: (finding: PreflightFinding) => boolean;
 }) {
   const tab = toolsTab;
   const setTab = onToolsTabChange;
@@ -158,6 +181,7 @@ export const ToolsPanel = memo(function ToolsPanel({
               { id: "logic" as const, label: t.tools.logicAudit },
               { id: "citations" as const, label: t.tools.citations },
               { id: "peerReview" as const, label: peerReviewCopy(locale).tab },
+              { id: "preflight" as const, label: preflightCopy(locale).tab },
               { id: "versions" as const, label: t.tools.versions },
             ] as const
           ).map((item) => (
@@ -336,6 +360,21 @@ export const ToolsPanel = memo(function ToolsPanel({
                 </li>
               ))}
             </ul>
+          </div>
+        ) : tab === "preflight" ? (
+          <div className="tools-section">
+            <h2 className="tools-section-title">{preflightCopy(locale).tab}</h2>
+            <PreflightPanel
+              latex={latex}
+              report={preflightReport}
+              loading={preflightLoading}
+              error={preflightError}
+              profile={preflightProfile}
+              onProfileChange={onPreflightProfileChange}
+              onRun={onRunPreflight}
+              onJumpToFinding={onJumpToPreflightFinding}
+              canJumpToFinding={canJumpToPreflightFinding}
+            />
           </div>
         ) : (
           <div className="tools-section">

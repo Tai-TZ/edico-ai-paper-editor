@@ -42,6 +42,7 @@ import { StatusBar } from "./components/StatusBar";
 import { ToolsPanel } from "./components/ToolsPanel";
 import type { MobileTab } from "./types";
 import { useEditorChat } from "./state/useEditorChat";
+import { useEditorPreflight } from "./state/useEditorPreflight";
 import { useEditorProject, type EditorProjectBootPayload } from "./state/useEditorProject";
 import { useEditorProviders } from "./state/useEditorProviders";
 import { useEditorTools, type EditorToolsChatBridge } from "./state/useEditorTools";
@@ -162,6 +163,16 @@ export function EditorWorkspace() {
     gateAuditFingerprintFromBoot: bootAudit?.gateAuditFingerprint ?? null,
     bootLogicAuditReport: bootAudit?.logicAuditReport ?? null,
     bootGateAuditReport: bootAudit?.gateAuditReport ?? null,
+  });
+
+  const preflight = useEditorPreflight({
+    projectId,
+    locale,
+    mainFile: project.mainFile,
+    activeFile: project.activeFile,
+    projectFiles: project.projectFiles,
+    switchActiveFile: project.switchActiveFile,
+    jumpToOutlineLine: latexWs.jumpToOutlineLine,
   });
 
   const chat = useEditorChat({
@@ -493,8 +504,29 @@ export function EditorWorkspace() {
       logicAuditProgressDetail: auditInProgress
         ? formatLogicAuditProgress(chatStreamProgress)
         : null,
+      preflightReport: preflight.report,
+      preflightLoading: preflight.loading,
+      preflightError: preflight.error,
+      preflightProfile: preflight.profile,
+      onPreflightProfileChange: preflight.setProfile,
+      onRunPreflight: preflight.runPreflight,
+      onJumpToPreflightFinding: preflight.jumpToFinding,
+      canJumpToPreflightFinding: preflight.canJumpToFinding,
     }),
-    [tools.toolsPanelProps, auditInProgress, chatStreamProgress, logicAuditScopeHint],
+    [
+      tools.toolsPanelProps,
+      auditInProgress,
+      chatStreamProgress,
+      logicAuditScopeHint,
+      preflight.report,
+      preflight.loading,
+      preflight.error,
+      preflight.profile,
+      preflight.setProfile,
+      preflight.runPreflight,
+      preflight.jumpToFinding,
+      preflight.canJumpToFinding,
+    ],
   );
 
   return (

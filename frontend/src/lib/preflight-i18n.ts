@@ -3,10 +3,20 @@ import type { UiLanguage } from "@/lib/locale-store";
 
 export type PreflightRuleCopy = { title: string; hint: string };
 
+// Mirrors `PreflightGroup` / `RequiredStatement` in src/models/preflight_schemas.py — small, fixed
+// literal unions, kept local (not imported from preflight-api.ts, which only mirrors rule ids) so
+// group/statement labels have somewhere typed to live.
+export type PreflightGroupId = "crossref" | "bib" | "statement" | "format" | "anon" | "length";
+export type RequiredStatementId =
+  "data_availability" | "ethics" | "coi" | "funding" | "author_contributions";
+
 export type PreflightCopy = {
   tab: string;
   run: string;
   running: string;
+  // Shown only before the first run of a session — must never be confused with `clean` (an
+  // actual clean result). Nothing has been checked yet, so nothing can be said to be fine.
+  beforeRun: string;
   // A clean report: no findings. Spec requirement, not a nicety — must read as a mechanical
   // check, never as a guarantee the venue will accept the paper.
   clean: string;
@@ -16,7 +26,8 @@ export type PreflightCopy = {
   goToLine: string;
   severity: Record<PreflightSeverity, string>;
   // A group skipped because it was never declared for this run (anon without double-blind,
-  // length without a word limit) — must never read as "this group passed".
+  // length without a word limit) — must never read as "this group passed". Generic fallback;
+  // `skippedReason` below gives the specific "why" for the two groups that can actually skip.
   skippedGroup: string;
   // A rule turned off for this report because it would conflict with another finding or setting
   // (an unresolved \input target, or the double-blind vs. funding-statement conflict).
@@ -25,6 +36,24 @@ export type PreflightCopy = {
   // for that reason rather than because it was not declared. Distinct message on purpose — see
   // the module docstring in src/services/preflight/runner.py's "no-content path".
   noContent: string;
+  // design §7 / spec's "Để sau" risk: a fresh-from-template draft is almost entirely placeholder
+  // text, so a plain run would bury the author under findings about a document they have not
+  // written yet. Shown instead of (not in place of the ability to run) the findings list.
+  placeholderTemplate: string;
+  profile: {
+    title: string;
+    doubleBlindLabel: string;
+    doubleBlindHint: string;
+    wordLimitLabel: string;
+    wordLimitHint: string;
+    statementsLabel: string;
+    statementsHint: string;
+  };
+  requiredStatementLabel: Record<RequiredStatementId, string>;
+  groupLabel: Record<PreflightGroupId, string>;
+  // Only "anon" and "length" are ever conditionally skipped (spec §3.5/§3.6); every other group
+  // always runs, so this record deliberately has no entries for them.
+  skippedReason: Record<"anon" | "length", string>;
   rules: Record<PreflightRuleId, PreflightRuleCopy>;
 };
 
@@ -33,6 +62,7 @@ const COPY: Record<UiLanguage, PreflightCopy> = {
     tab: "Preflight",
     run: "Run preflight check",
     running: "Running preflight check…",
+    beforeRun: "Nothing checked yet — declare your submission profile above, then run the check.",
     clean:
       "No issues found. This is a mechanical check, not a guarantee of acceptance — always read your venue's call for papers too.",
     approximate:
@@ -48,6 +78,39 @@ const COPY: Record<UiLanguage, PreflightCopy> = {
       "Turned off for this report — it would conflict with another setting or an unresolved file.",
     noContent:
       "Nothing to check yet. The draft is still empty or just the template — every check was skipped for that reason, not because it was turned off.",
+    placeholderTemplate:
+      "This draft still reads like an unfinished template — mostly placeholder text and TODOs, not written content yet. You can still run the check, but most findings would just point back at things you haven't written. Consider filling in the draft first.",
+    profile: {
+      title: "Submission profile",
+      doubleBlindLabel: "Double-blind submission",
+      doubleBlindHint:
+        "Turn this on if your venue requires an anonymous submission — it enables checks for author names, emails, affiliations, and other identity leaks.",
+      wordLimitLabel: "Word limit (optional)",
+      wordLimitHint:
+        "Enter your venue's word limit to flag an estimated overrun. Leave blank to skip the length check.",
+      statementsLabel: "Required statements",
+      statementsHint:
+        "Choose which statements your venue requires, so only those are flagged when missing.",
+    },
+    requiredStatementLabel: {
+      data_availability: "Data availability",
+      ethics: "Ethics / IRB approval",
+      coi: "Conflict of interest",
+      funding: "Funding",
+      author_contributions: "Author contributions",
+    },
+    groupLabel: {
+      crossref: "Cross-references",
+      bib: "Bibliography",
+      statement: "Required statements",
+      format: "Formatting",
+      anon: "Anonymity",
+      length: "Length",
+    },
+    skippedReason: {
+      anon: "Not checked — declare this as a double-blind submission above to enable identity-leak checks.",
+      length: "Not checked — enter a word limit above to enable the length check.",
+    },
     rules: {
       "crossref.undefined_ref": {
         title: "Undefined reference",
@@ -171,6 +234,7 @@ const COPY: Record<UiLanguage, PreflightCopy> = {
     tab: "Trước khi nộp",
     run: "Chạy kiểm tra trước khi nộp",
     running: "Đang kiểm tra…",
+    beforeRun: "Chưa kiểm tra gì — hãy khai báo hồ sơ nộp bài ở trên rồi chạy kiểm tra.",
     clean:
       "Không phát hiện vấn đề nào. Đây là kiểm tra tự động, không phải lời cam kết bài sẽ được chấp nhận — hãy luôn đọc kỹ thông báo mời bài (call for papers) của tạp chí/hội nghị.",
     approximate:
@@ -186,6 +250,39 @@ const COPY: Record<UiLanguage, PreflightCopy> = {
       "Đã tắt cho báo cáo này — vì xung đột với một cài đặt khác hoặc một tệp \\input chưa phân giải được.",
     noContent:
       "Chưa có gì để kiểm tra. Bản thảo vẫn còn trống hoặc mới chỉ là mẫu — mọi mục kiểm tra bị bỏ qua vì lý do này, không phải vì bị tắt.",
+    placeholderTemplate:
+      "Bản thảo này vẫn giống một mẫu chưa hoàn thiện — phần lớn là chỗ trống và ghi chú TODO, chưa có nội dung thật. Bạn vẫn có thể chạy kiểm tra, nhưng hầu hết kết quả sẽ chỉ nhắc lại những phần bạn chưa viết. Nên hoàn thiện bản thảo trước.",
+    profile: {
+      title: "Hồ sơ nộp bài",
+      doubleBlindLabel: "Nộp bài phản biện kín (double-blind)",
+      doubleBlindHint:
+        "Bật nếu tạp chí/hội nghị yêu cầu nộp bài ẩn danh — sẽ kích hoạt các kiểm tra về tên tác giả, email, đơn vị công tác và các dấu hiệu để lộ danh tính khác.",
+      wordLimitLabel: "Giới hạn số từ (không bắt buộc)",
+      wordLimitHint:
+        "Nhập giới hạn số từ của tạp chí/hội nghị để cảnh báo khi vượt quá ước tính. Để trống nếu muốn bỏ qua kiểm tra độ dài.",
+      statementsLabel: "Các tuyên bố bắt buộc",
+      statementsHint:
+        "Chọn những tuyên bố mà tạp chí/hội nghị của bạn yêu cầu, để chỉ những mục đó được cảnh báo khi thiếu.",
+    },
+    requiredStatementLabel: {
+      data_availability: "Khả năng truy cập dữ liệu",
+      ethics: "Đạo đức nghiên cứu / phê duyệt IRB",
+      coi: "Xung đột lợi ích",
+      funding: "Nguồn tài trợ",
+      author_contributions: "Vai trò các tác giả",
+    },
+    groupLabel: {
+      crossref: "Tham chiếu chéo",
+      bib: "Tài liệu tham khảo",
+      statement: "Tuyên bố bắt buộc",
+      format: "Định dạng",
+      anon: "Ẩn danh",
+      length: "Độ dài",
+    },
+    skippedReason: {
+      anon: "Chưa kiểm tra — hãy khai báo đây là bài nộp phản biện kín ở trên để bật kiểm tra lộ danh tính.",
+      length: "Chưa kiểm tra — hãy nhập giới hạn số từ ở trên để bật kiểm tra độ dài.",
+    },
     rules: {
       "crossref.undefined_ref": {
         title: "Tham chiếu không xác định",
