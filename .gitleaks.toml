@@ -1,0 +1,20 @@
+# gitleaks config for the CI job (.github/workflows/security.yml) and the pre-commit hook.
+#
+# The default ruleset is kept in full; this only allowlists one literal.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = """
+The shared fake JWT signing key the test suite sets via monkeypatch. It has lived in the repo
+since June 2026 and appears in fourteen test modules, so `generic-api-key` flags it (entropy
+3.95) on any PR whose diff happens to add another one — which is a CI failure with nothing behind
+it.
+
+Allowlisted by its exact literal rather than by path: scoping to `tests/` would need a `paths`
+entry, and gitleaks ORs `regexes` with `paths`, so that would silence every finding under
+`tests/` instead of this one string. A real credential will never equal this literal, so matching
+it anywhere is as narrow as matching it in one directory.
+"""
+regexes = ['''test-secret-key-for-jwt-signing-32chars''']

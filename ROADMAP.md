@@ -46,6 +46,7 @@ Edico là nền tảng **Assisted Editing** — AI đóng vai biên tập viên 
 | **L4 Audit** | `revisionAction` on Accept/Reject, `GET /sessions/{id}/revisions` | ✅ |
 | **Persistence** | `revision_history` + `citation_registry` qua DB session store | ✅ |
 | **DevOps** | CI (pytest + ruff), Docker backend | |
+| **Preflight** | Submission Preflight — 29 luật tĩnh, không LLM (cross-reference, BibTeX hygiene, required statements, formatting manipulation, anonymity, word-count) qua `POST /api/v1/preflight/run`, tab Tools → Preflight | Advisory only (`comment_only`), như `logic_audit` |
 
 ### ⚠️ Còn thiếu / partial (P2+)
 
@@ -338,6 +339,7 @@ gantt
 3. **PDF import** — dựng lại bảng/hình (hiện chỉ text)  
 4. **Structure auto-apply** — diff cho từng gợi ý, bật/tắt theo người dùng  
 5. **Template ACM** — cần font Libertine/newtx (`texlive-fonts-extra` hoặc gói font tối thiểu) trong image  
+6. **Submission Preflight — mở rộng** (deferred từ design §8, cố ý không làm ở v1): DOI resolve thật qua DataCite/CrossRef (gắn với mục 2 ở trên); page count thật từ compile output thay vì ước lượng từ số từ; reporting checklist theo chuẩn venue (CONSORT, PRISMA, ARRIVE); quét PDF metadata tìm rò danh tính double-blind sau compile; thêm entry Preflight trong Export dialog (hiện chỉ có trong Tools panel); đồng bộ declared profile qua DB thay cho localStorage
 
 ---
 

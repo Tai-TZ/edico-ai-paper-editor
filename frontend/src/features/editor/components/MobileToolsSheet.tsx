@@ -2,6 +2,11 @@ import { X } from "lucide-react";
 import { useLocale } from "@/components/locale-context";
 import { editorCopy } from "@/lib/editor-i18n";
 import type { LLMProvider, LogicAuditReport, RevisionRecord } from "@/lib/api/academic";
+import type {
+  PreflightFinding,
+  PreflightProfileInput,
+  PreflightReport,
+} from "@/lib/api/preflight-api";
 import type { LogicAuditMode, LogicAuditScope } from "@/lib/logic-audit";
 import type { StructureSuggestion } from "@/lib/structure-suggestions";
 import type { ToolsTab } from "../types";
@@ -39,6 +44,14 @@ export function MobileToolsSheet({
   onCitationsUpdated,
   llmProvider,
   llmModel,
+  preflightReport,
+  preflightLoading = false,
+  preflightError = null,
+  preflightProfile,
+  onPreflightProfileChange,
+  onRunPreflight,
+  onJumpToPreflightFinding,
+  canJumpToPreflightFinding,
 }: {
   onClose: () => void;
   latex: string;
@@ -71,6 +84,14 @@ export function MobileToolsSheet({
   onCitationsUpdated: (results: Record<string, unknown>[], summary: string) => void;
   llmProvider?: LLMProvider;
   llmModel?: string;
+  preflightReport: PreflightReport | null;
+  preflightLoading?: boolean;
+  preflightError?: string | null;
+  preflightProfile: PreflightProfileInput;
+  onPreflightProfileChange: (profile: PreflightProfileInput) => void;
+  onRunPreflight: () => void;
+  onJumpToPreflightFinding: (finding: PreflightFinding) => void;
+  canJumpToPreflightFinding: (finding: PreflightFinding) => boolean;
 }) {
   const { locale } = useLocale();
   const t = editorCopy(locale);
@@ -121,6 +142,14 @@ export function MobileToolsSheet({
           onClose={onClose}
           llmProvider={llmProvider}
           llmModel={llmModel}
+          preflightReport={preflightReport}
+          preflightLoading={preflightLoading}
+          preflightError={preflightError}
+          preflightProfile={preflightProfile}
+          onPreflightProfileChange={onPreflightProfileChange}
+          onRunPreflight={onRunPreflight}
+          onJumpToPreflightFinding={onJumpToPreflightFinding}
+          canJumpToPreflightFinding={canJumpToPreflightFinding}
         />
       </div>
     </div>
