@@ -135,3 +135,63 @@ def test_ethics_approval_phrase_satisfies_ethics():
 def test_bare_ethics_heading_is_accepted_as_a_deliberate_disclosure_signal():
     doc = "\\section{Ethics}\nNone required.\n"
     assert check_statements(build_source("main.tex", {"main.tex": doc}), ["ethics"]) == []
+
+
+# --- fix round 1: widened data-availability phrasing (IMPORTANT 1, 2) ------------------------
+
+
+def test_corresponding_author_on_reasonable_request_is_recognised():
+    doc = (
+        "The datasets generated during this study are available from the corresponding author on reasonable request.\n"
+    )
+    assert check_statements(build_source("main.tex", {"main.tex": doc}), ["data_availability"]) == []
+
+
+def test_available_in_main_text_or_supplementary_is_recognised():
+    doc = "All data are available in the main text or the supplementary materials.\n"
+    assert check_statements(build_source("main.tex", {"main.tex": doc}), ["data_availability"]) == []
+
+
+def test_available_and_request_across_a_sentence_boundary_does_not_satisfy():
+    # The widened gap between "available" and its tail term is bounded to 80 non-period
+    # characters precisely so it cannot bleed across a sentence boundary: "available" ending one
+    # sentence and an unrelated "request" appearing in the next sentence must not pair up.
+    doc = "The code is available. If you need something, please submit a request.\n"
+    out = check_statements(build_source("main.tex", {"main.tex": doc}), ["data_availability"])
+    assert [f.rule for f in out] == ["statement.data_availability_missing"]
+
+
+# --- fix round 1: heading-less CRediT role list (IMPORTANT 3) --------------------------------
+
+
+def test_credit_role_list_without_a_heading_is_recognised():
+    doc = "Conceptualization, A.B.; methodology, C.D.\n"
+    assert check_statements(build_source("main.tex", {"main.tex": doc}), ["author_contributions"]) == []
+
+
+def test_ordinary_methodology_and_resources_sections_do_not_satisfy_contributions():
+    # The trap: Methodology and Resources are both CRediT taxonomy roles AND ordinary section
+    # titles. A detector that fires on the bare role word would satisfy author_contributions on
+    # nearly every paper in existence. Neither section here is followed by ", initials" or
+    # chained to another role by a semicolon, so this must stay missing.
+    doc = "\\section{Methodology}\nWe did things.\n\\section{Resources}\nWe used things.\n"
+    out = check_statements(build_source("main.tex", {"main.tex": doc}), ["author_contributions"])
+    assert [f.rule for f in out] == ["statement.author_contributions_missing"]
+
+
+def test_repeated_single_role_list_does_not_satisfy_contributions():
+    # Two attributions but the SAME role repeated — not two distinct roles, so this must not be
+    # mistaken for a real contributions block by this detector alone (the heading/phrase table is
+    # the correct place to recognise a two-person, one-role credit line, not the shape detector).
+    doc = "Methodology, A.B.; Methodology, C.D.\n"
+    out = check_statements(build_source("main.tex", {"main.tex": doc}), ["author_contributions"])
+    assert [f.rule for f in out] == ["statement.author_contributions_missing"]
+
+
+# --- fix round 1: Vietnamese acknowledgements heading satisfies funding (IMPORTANT 4) ---------
+
+
+def test_vietnamese_acknowledgements_heading_satisfies_funding():
+    for heading in ("Lời cảm ơn", "Loi cam on"):
+        doc = f"\\section{{{heading}}}\nCảm ơn Quỹ X.\n"
+        assert check_statements(build_source("main.tex", {"main.tex": doc}), ["funding"]) == []

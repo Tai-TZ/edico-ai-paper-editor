@@ -27,7 +27,7 @@ accepted in a heading but not in body prose.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from src.services.preflight.catalogue import Finding
 from src.services.preflight.source import PreflightSource
@@ -51,10 +51,17 @@ def _phrase(terms: str) -> re.Pattern[str]:
     return re.compile(terms, re.IGNORECASE)
 
 
+# A bounded "nearby" gap for phrase patterns that pair two terms loosely (e.g. "available ...
+# request") without the pairing crossing a sentence boundary. Excludes periods, so it can shrink
+# to fit between two words in the same sentence but can never stretch past a "." into the next
+# one — "available." followed by an unrelated "request" one sentence later must not pair up.
+_NEARBY_GAP = r"[^.]{0,80}?"
+
+
 # --- data_availability ---------------------------------------------------------------------
 # EN: data availability / data availability statement / availability of data / data sharing.
 # VI: "tính khả dụng (của) dữ liệu", "chia sẻ dữ liệu" + unaccented. Kept broad — see module
-# docstring; "available upon/on request" is specific enough on its own to not need narrowing.
+# docstring.
 _DATA_AVAILABILITY_TERMS = (
     r"\bdata\s+availability(?:\s+statement)?\b"
     r"|\bavailability\s+of\s+data\b"
@@ -64,8 +71,23 @@ _DATA_AVAILABILITY_TERMS = (
     r"|\bchia\s+sẻ\s+dữ\s+liệu\b"
     r"|\bchia\s+se\s+du\s+lieu\b"
 )
-# Inline-only phrasing: a disclosure sentence with no dedicated heading at all.
-_DATA_AVAILABILITY_PHRASE_EXTRA = r"|\bdata\s+supporting\s+the\s+findings\b|\bavailable\s+(?:upon|on)\s+request\b"
+# Inline-only phrasing: a disclosure sentence with no dedicated heading at all. "available" is
+# paired with its tail term through the bounded _NEARBY_GAP rather than a fixed "upon|on" — the
+# single most common real-world wording is "available from the corresponding author on
+# reasonable request" (fix round 1, IMPORTANT 1), and the gap also lets this family absorb the
+# Science/PNAS-style "available in the main text or the supplementary materials" (IMPORTANT 2).
+# "data are/is available" and the Vietnamese "có sẵn"/"co san" pairings are the same shape.
+_DATA_AVAILABILITY_PHRASE_EXTRA = (
+    r"|\bdata\s+supporting\s+the\s+findings\b"
+    r"|\bavailable\b"
+    + _NEARBY_GAP
+    + r"\b(?:request|corresponding\s+author|main\s+text|supplementary\s+materials?|supplementary\s+information)\b"
+    r"|\bdata\s+(?:are|is)\s+available\b"
+    r"|\bcó\s+sẵn\b" + _NEARBY_GAP + r"\b(?:yêu\s+cầu|tác\s+giả\s+liên\s+hệ|văn\s+bản\s+chính|tài\s+liệu\s+bổ\s+sung)\b"
+    r"|\bco\s+san\b" + _NEARBY_GAP + r"\b(?:yeu\s+cau|tac\s+gia\s+lien\s+he|van\s+ban\s+chinh|tai\s+lieu\s+bo\s+sung)\b"
+    r"|\bdữ\s+liệu\s+có\s+sẵn\b"
+    r"|\bdu\s+lieu\s+co\s+san\b"
+)
 _DATA_AVAILABILITY_HEADING_RE = _heading(_DATA_AVAILABILITY_TERMS, envs=r"data[-_]?availability|datasharing")
 _DATA_AVAILABILITY_PHRASE_RE = _phrase(_DATA_AVAILABILITY_TERMS + _DATA_AVAILABILITY_PHRASE_EXTRA)
 
@@ -139,7 +161,16 @@ _FUNDING_TERMS = (
     r"|\bhỗ\s+trợ\s+tài\s+chính\b"
     r"|\bho\s+tro\s+tai\s+chinh\b"
 )
-_FUNDING_HEADING_RE = _heading(_FUNDING_TERMS, envs=r"acknowledgements?|acknowledgments?|funding")
+# Heading-only, symmetric with the \begin{acknowledgements} environment above but for the
+# Vietnamese heading form a Vietnamese paper actually uses: \section{Lời cảm ơn} ("Acknowledgements")
+# is a \section title, not an environment, so it belongs in the heading terms, not in `envs`.
+# Excluded from the phrase table on purpose — same treatment as "acknowledgements" itself, which
+# is also heading/env-only and not a member of _FUNDING_TERMS.
+_FUNDING_HEADING_ONLY_TERMS = r"\blời\s+cảm\s+ơn\b|\bloi\s+cam\s+on\b"
+_FUNDING_HEADING_RE = _heading(
+    _FUNDING_TERMS + "|" + _FUNDING_HEADING_ONLY_TERMS,
+    envs=r"acknowledgements?|acknowledgments?|funding",
+)
 _FUNDING_PHRASE_RE = _phrase(_FUNDING_TERMS)
 
 # --- author_contributions -------------------------------------------------------------------
@@ -156,6 +187,71 @@ _AUTHOR_CONTRIBUTIONS_TERMS = (
 )
 _AUTHOR_CONTRIBUTIONS_HEADING_RE = _heading(_AUTHOR_CONTRIBUTIONS_TERMS, envs=r"authorcontributions|credit")
 _AUTHOR_CONTRIBUTIONS_PHRASE_RE = _phrase(_AUTHOR_CONTRIBUTIONS_TERMS)
+
+# IMPORTANT 3 (fix round 1): a heading-less CRediT-style role list — "Conceptualization, A.B.;
+# methodology, C.D." — never says the words "author contributions" or "CRediT" at all, so neither
+# pattern above ever sees it. It has to be recognised by its SHAPE: a CRediT taxonomy role
+# immediately followed by a comma/colon and an initials-or-name attribution, chained to at least
+# one more such role+attribution segment by a semicolon.
+#
+# The trap this has to dodge: half the CRediT taxonomy (Methodology, Software, Resources,
+# Validation, Investigation, Supervision, Visualization) are ALSO ordinary section titles.
+# Matching a bare role word would make `\section{Methodology}` satisfy author_contributions on
+# nearly every paper in existence — that single-word approach is rejected on purpose. The
+# role-then-attribution shape defuses the trap structurally, not by keyword luck: a bare
+# `\section{Methodology}` is followed by `}`, never by ", A.B.", and is never itself chained to a
+# second role by a semicolon — so `\section{Methodology}` + `\section{Resources}` as two ordinary
+# sections can never match this pattern, no matter how many CRediT-named sections a paper happens
+# to have (test_ordinary_methodology_and_resources_sections_do_not_satisfy_contributions).
+# Distinctness of the two roles is checked in Python after the regex match, not by the regex
+# itself, so a real list repeating one role across contributors ("Methodology, A.B.; Methodology,
+# C.D.") is treated the same as a trivial one-role repeat would be — rejected — while a genuine
+# two-role list ("Conceptualization, A.B.; methodology, C.D.") is accepted, which is the one
+# distinction that actually separates a contributions block from noise.
+_CREDIT_ROLES = (
+    r"conceptuali[sz]ation"
+    r"|methodology"
+    r"|software"
+    r"|validation"
+    r"|formal\s+analysis"
+    r"|investigation"
+    r"|resources"
+    r"|data\s+curation"
+    r"|writing\s*[-–—]?\s*original\s+draft"
+    r"|writing\s*[-–—]?\s*review\s*(?:&|and)\s*editing"
+    r"|visuali[sz]ation"
+    r"|supervision"
+    r"|project\s+administration"
+    r"|funding\s+acquisition"
+)
+# The attribution right after the role: initials with periods ("A.B.", "J. D.") or a
+# two-or-more-word capitalised name ("John Doe"). Requiring at least two words for the name form
+# (not one) stops an ordinary Title-Case word from being mistaken for an attribution — a single
+# capitalised word straight after "role," is far more likely to be another role or a stray heading
+# than a surname.
+_CREDIT_WHO = r"(?:(?:[A-Z]\.\s*){1,4}|[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})"
+_CREDIT_SEGMENT = rf"\b(?:{_CREDIT_ROLES})\b\s*[:,]\s*{_CREDIT_WHO}"
+_CREDIT_CHAIN_RE = re.compile(rf"{_CREDIT_SEGMENT}(?:\s*;\s*{_CREDIT_SEGMENT})+", re.IGNORECASE)
+_CREDIT_ROLE_RE = re.compile(rf"\b(?:{_CREDIT_ROLES})\b", re.IGNORECASE)
+
+
+def _credit_role_list_present(masked: str) -> bool:
+    """True if ``masked`` contains a chained role-then-attribution list naming at least two
+    DISTINCT CRediT roles (see the comment on ``_CREDIT_ROLES`` above for why "distinct" and
+    "chained" are both load-bearing, not just "any role word appears somewhere")."""
+    for match in _CREDIT_CHAIN_RE.finditer(masked):
+        roles = {role.lower() for role in _CREDIT_ROLE_RE.findall(match.group(0))}
+        if len(roles) >= 2:
+            return True
+    return False
+
+
+# statement name -> an extra structural check beyond heading/phrase matching, for a statement
+# whose disclosure shape is not a fixed heading or phrase at all. Checked only when both the
+# heading and phrase patterns for that statement miss.
+_EXTRA_CHECKS: dict[str, Callable[[str], bool]] = {
+    "author_contributions": _credit_role_list_present,
+}
 
 # statement name -> heading pattern. Satisfied by a dedicated heading or named environment.
 _HEADING_PATTERNS: dict[str, re.Pattern[str]] = {
@@ -185,9 +281,10 @@ def check_statements(src: PreflightSource, required: Sequence[str]) -> list[Find
     is ignored silently rather than raising: it cannot really happen given the caller's type, and
     crashing a whole preflight run over an unknown statement name would be worse than skipping it.
 
-    A statement is satisfied the moment either its heading or its phrase pattern matches anywhere
-    across ``src.iter_masked()`` — one matching file is enough, so a statement living in an
-    included back-matter file counts the same as one in the main file.
+    A statement is satisfied the moment its heading pattern, its phrase pattern, or (for
+    ``author_contributions`` only) its extra structural check matches anywhere across
+    ``src.iter_masked()`` — one matching file is enough, so a statement living in an included
+    back-matter file counts the same as one in the main file.
 
     A finding for a missing statement has no meaningful location: there is no line to jump to for
     something that was never written. ``file`` is the main file, ``line`` stays ``None``, and the
@@ -201,6 +298,8 @@ def check_statements(src: PreflightSource, required: Sequence[str]) -> list[Find
             break
         for name in remaining:
             if _HEADING_PATTERNS[name].search(masked) or _PHRASE_PATTERNS[name].search(masked):
+                satisfied.add(name)
+            elif name in _EXTRA_CHECKS and _EXTRA_CHECKS[name](masked):
                 satisfied.add(name)
 
     return [
