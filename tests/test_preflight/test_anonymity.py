@@ -235,11 +235,15 @@ def test_linebreak_separated_name_and_affiliation_both_appear_in_the_symbol():
 
 
 def test_vietnamese_and_european_funder_codes_are_recognised():
+    # Updated in fix round 5: "FWF P12345" and "NAFOSTED 103.99-2019.12" used to be asserted bare.
+    # The bare agency-prefix path now requires a funding-context word in the same sentence, so the
+    # inputs carry one -- the grant-code SHAPES under test (the dot separator, the one-letter
+    # grant-type code, the decimal-bearing NAFOSTED form) are unchanged.
     for text in (
         "Funded under VINIF.2020.DA15 project.",
         "Supported by FWF P 12345.",
-        "FWF P12345",
-        "NAFOSTED 103.99-2019.12",
+        "Supported by FWF P12345.",
+        "Funded by NAFOSTED 103.99-2019.12.",
     ):
         out = check_anonymity(build_source("main.tex", {"main.tex": text + "\n"}))
         assert "anon.funding_identifiers" in [f.rule for f in out], text
@@ -291,15 +295,19 @@ def test_token_standards_are_not_grant_numbers():
 
 
 def test_real_grant_codes_still_fire():
+    # Updated in fix round 5: the four bare agency forms gained the funding word the new
+    # same-sentence requirement needs. The two ERC forms stay BARE deliberately -- _ERC_GRANT_RE
+    # is exempt from that requirement (its call-year-plus-uppercase-programme shape is its own
+    # second piece of evidence), and this test is what pins that exemption.
     for text in (
         "ERC-2019-ADG",
         "ERC-2021-COG",
-        "NRF-2021R1A2C1",
-        "NSF-1234567",
-        "DFG 123456",
+        "Supported by NRF-2021R1A2C1.",
+        "Supported by NSF-1234567.",
+        "Funded by DFG 123456.",
         "Funded under VINIF.2020.DA15 project.",
         "Supported by FWF P 12345.",
-        "NAFOSTED 103.99-2019.12",
+        "We acknowledge NAFOSTED 103.99-2019.12.",
     ):
         out = check_anonymity(build_source("main.tex", {"main.tex": text + "\n"}))
         assert "anon.funding_identifiers" in [f.rule for f in out], text
@@ -317,14 +325,17 @@ def test_metric_thresholds_are_not_grant_numbers():
 
 
 def test_real_grant_codes_survive_the_decimal_guard():
+    # Updated in fix round 5, same reason as test_real_grant_codes_still_fire: the bare agency
+    # forms gained a funding word; "ERC-2019-ADG" stays bare (exempt path); the FNR line already
+    # went through the grant-phrase path, which is untouched.
     for text in (
-        "NSF-1234567",
-        "DFG 123456",
+        "Supported by NSF-1234567.",
+        "Funded by DFG 123456.",
         "ERC-2019-ADG",
-        "NRF-2021R1A2C1",
+        "Supported by NRF-2021R1A2C1.",
         "Funded under VINIF.2020.DA15 project.",
         "Supported by FWF P 12345.",
-        "NAFOSTED 103.99-2019.12",
+        "We acknowledge NAFOSTED 103.99-2019.12.",
         "Funded by the FNR under grant 12345.",
     ):
         out = check_anonymity(build_source("main.tex", {"main.tex": text + "\n"}))
@@ -344,3 +355,110 @@ def test_identity_in_an_input_ed_appendix_is_still_a_leak():
     out = check_anonymity(build_source("main.tex", files))
     hit = next(f for f in out if f.rule == "anon.author_populated")
     assert hit.file == "appendix.tex"
+
+
+# --- fix round 5: the bare agency-prefix path needs a funding word in the same sentence --------
+
+
+def test_technical_identifiers_near_agency_names_are_not_grants():
+    for text in (
+        "Simulated in DOE-2.1E.",
+        "The NASA-STD-3001 limits apply.",
+        "Per DOE-STD-1020 the design holds.",
+        "See the NSF TR 1234 report.",
+        "Cells were NIH-3T3 fibroblasts.",
+        "The NRF-2 pathway was studied.",
+        "Certified to NSF 61 for potable water.",
+        "We used the NASA-TLX workload scale.",
+        "The kinase adopts a DFG-in conformation.",
+        "The FNR 0.05 threshold was used.",
+    ):
+        out = check_anonymity(build_source("main.tex", {"main.tex": text + "\n"}))
+        assert "anon.funding_identifiers" not in [f.rule for f in out], text
+
+
+def test_funding_sentences_still_fire():
+    for text in (
+        "This work was supported by NSF-1234567.",
+        "Funded by DFG 123456.",
+        "The authors are grateful for support from ERC-2019-ADG.",
+        "This research was funded under VINIF.2020.DA15.",
+        "Supported by FWF P 12345.",
+        "We acknowledge NAFOSTED 103.99-2019.12.",
+        "Nghiên cứu được tài trợ bởi NAFOSTED 103.99-2019.12.",
+        "Nghien cuu duoc tai tro boi NAFOSTED 103.99-2019.12.",
+        "Funded by the FNR under grant 12345.",
+        "Supported by the ARC, grant no. DP123456.",
+        "under Grant No. 12345",
+    ):
+        out = check_anonymity(build_source("main.tex", {"main.tex": text + "\n"}))
+        assert "anon.funding_identifiers" in [f.rule for f in out], text
+
+
+def test_a_funding_word_in_a_neighbouring_sentence_does_not_count():
+    doc = "This work was supported generously. Cells were NIH-3T3 fibroblasts.\n"
+    out = check_anonymity(build_source("main.tex", {"main.tex": doc}))
+    assert "anon.funding_identifiers" not in [f.rule for f in out]
+
+
+def test_the_sentence_boundary_holds_for_a_code_that_clears_the_floor():
+    # The pinned neighbouring-sentence test above uses NIH-3T3, whose code is 3 characters and so
+    # is already stopped by round 3's floor -- it would pass even with a raw character window.
+    # These inputs use codes that DO clear the floor and the decimal guard, so the sentence
+    # boundary is the only thing keeping them quiet, in both scan directions.
+    for doc in (
+        "The grant was generous. Simulated in DOE-2.1E.\n",
+        "Simulated in DOE-2.1E. The grant was generous.\n",
+        "Simulated in DOE-2.1E! Funded elsewhere.\n",
+        "Simulated in DOE-2.1E? Funded elsewhere.\n",
+        "Funded generously.\n\nSimulated in DOE-2.1E and reported.\n",
+    ):
+        out = check_anonymity(build_source("main.tex", {"main.tex": doc}))
+        assert "anon.funding_identifiers" not in [f.rule for f in out], doc
+
+
+def test_a_funding_word_after_the_code_in_the_same_sentence_counts():
+    # The scan runs outward in BOTH directions from the match, not only leftward: a funding word
+    # trailing the code is the same evidence as one preceding it.
+    for text in (
+        "This project (NSF-1234567) was supported in full.",
+        "Work on DFG 123456 was financed by the project.",
+    ):
+        out = check_anonymity(build_source("main.tex", {"main.tex": text + "\n"}))
+        assert "anon.funding_identifiers" in [f.rule for f in out], text
+
+
+def test_a_bare_agency_code_with_no_funding_word_is_deliberately_silent():
+    # The accepted trade-off of the fix-round-5 requirement, pinned so nobody "fixes" it back: a
+    # lone agency code in a sentence with no funding vocabulary is now silent on the agency path.
+    # The explicit grant-phrase path still catches the same number independently.
+    out = check_anonymity(build_source("main.tex", {"main.tex": "NSF-1234567.\n"}))
+    assert "anon.funding_identifiers" not in [f.rule for f in out]
+    out = check_anonymity(build_source("main.tex", {"main.tex": "Grant No. NSF-1234567.\n"}))
+    assert "anon.funding_identifiers" in [f.rule for f in out]
+
+
+def test_erc_path_stays_exempt_from_the_context_requirement():
+    # Both halves of the exemption: a bare real ERC code fires with no funding word anywhere, and
+    # a token-standard name stays silent even when the sentence is full of funding vocabulary.
+    out = check_anonymity(build_source("main.tex", {"main.tex": "ERC-2018-STG\n"}))
+    assert "anon.funding_identifiers" in [f.rule for f in out]
+    for text in (
+        "The supported contract uses an ERC-20 token.",
+        "Our funded prototype implements ERC-1155 multi-token transfers.",
+    ):
+        out = check_anonymity(build_source("main.tex", {"main.tex": text + "\n"}))
+        assert "anon.funding_identifiers" not in [f.rule for f in out], text
+
+
+def test_vietnamese_funding_context_words_are_accepted_accented_and_unaccented():
+    for text in (
+        "Kinh phí cho nghiên cứu này đến từ NAFOSTED 103.99-2019.12.",
+        "Kinh phi cho nghien cuu nay den tu NAFOSTED 103.99-2019.12.",
+        "Hỗ trợ bởi NSF-1234567.",
+        "Ho tro boi NSF-1234567.",
+        "Học bổng NSF-1234567.",
+        "Hoc bong NSF-1234567.",
+    ):
+        out = check_anonymity(build_source("main.tex", {"main.tex": text + "\n"}))
+        assert "anon.funding_identifiers" in [f.rule for f in out], text

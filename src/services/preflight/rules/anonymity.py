@@ -43,13 +43,19 @@ The nine rules, each a short independent scan:
   written its acknowledgements yet at all, regardless of what they say.
 
 - ``anon.funding_identifiers`` (``warning``): a grant number in a recognisable shape — a funding
-  agency's own prefix (``NSF-1234567``, ``DFG 123456``, ``ERC-2019-ADG``) or an explicit
-  grant-number phrase (``Grant No. 12345``, ``grant number 12345``, ``award no. 12345``, ``under
-  grant 12345``), including the Vietnamese ``mã số đề tài`` / ``số quyết định`` forms, accented and
-  unaccented. A bare four-digit number is a year, not a grant, and must never fire this rule on
-  its own; a code that is nothing but a short decimal fraction (``0.05``) is a metric threshold,
-  not a grant, and is excluded on the agency-prefix path — see the comments on
-  ``_AGENCY_PREFIX_RE``, ``_BARE_DECIMAL_CODE_RE``, and ``_GRANT_PHRASE_RE``.
+  agency's own prefix (``NSF-1234567``, ``DFG 123456``), ERC's own call-year form
+  (``ERC-2019-ADG``), or an explicit grant-number phrase (``Grant No. 12345``, ``grant number
+  12345``, ``award no. 12345``, ``under grant 12345``), including the Vietnamese ``mã số đề tài``
+  / ``số quyết định`` forms, accented and unaccented. A bare four-digit number is a year, not a
+  grant, and must never fire this rule on its own; a code that is nothing but a short decimal
+  fraction (``0.05``) is a metric threshold, not a grant, and is excluded on the agency-prefix
+  path. The bare agency-prefix path additionally requires a **second piece of evidence**: a
+  funding-context word (``supported``, ``funded``, ``grant``, ``grateful``, ``tài trợ``, ...) in
+  the same sentence as the match — every real funding sentence has one and no methods-section cell
+  line, standards citation, part number, or metric threshold does. The two paths that carry their
+  own evidence in their own shape — the explicit grant phrase, and ERC's call-year-plus-programme
+  form — are deliberately exempt. See the comments on ``_AGENCY_PREFIX_RE``,
+  ``_BARE_DECIMAL_CODE_RE``, ``_FUNDING_CONTEXT_RE``, ``_ERC_GRANT_RE``, and ``_GRANT_PHRASE_RE``.
 
 - ``anon.self_reference`` (``info``): a temporal back-reference to the authors' own earlier
   publication ("our previous work", "we previously showed"), English and Vietnamese. The signal is
@@ -305,7 +311,10 @@ def _check_acknowledgements_present(src: PreflightSource) -> list[Finding]:
 # "NSF-1234567" — digits only — is accepted same as a longer mixed code. Kept to a fixed,
 # well-known list of funder abbreviations rather than "any short uppercase word + digit",
 # specifically so this never fires on an unrelated acronym-and-number pairing (a model name like
-# "GPT-4", a standard like "ISO-9001").
+# "GPT-4", a standard like "ISO-9001"). Since fix round 5 a match on this path is ALSO required to
+# have a funding-context word in its own sentence (_FUNDING_CONTEXT_RE / _has_funding_context) --
+# the agency prefix alone is weak evidence and that requirement, not the agency list, is what now
+# carries this path.
 #
 # Deliberately NOT in this list: "MRC", "VAST", "MOST", "ARC". A bare three-letter uppercase token
 # immediately followed by a hyphen and a digit is too common in ordinary scientific prose for this
@@ -341,6 +350,13 @@ def _check_acknowledgements_present(src: PreflightSource) -> list[Finding]:
 # collision class is _BARE_DECIMAL_CODE_RE further down -- it stops "<any agency> <decimal>"
 # regardless of which abbreviation leads; removing FNR additionally covers the forms where the
 # token after it is not a decimal at all.
+#
+# All six removals above (MRC/VAST/MOST/ARC, ERC's carve-out, FNR) are kept as-is in fix round 5
+# even though the funding-context requirement added there (_FUNDING_CONTEXT_RE) would now silence
+# every one of their collision sentences on its own: "We used the MRC-5 cell line.", "The contract
+# uses the ERC-20 token standard.", "The FNR 0.05 threshold was used." contain no funding word.
+# Belt and braces — a per-token exclusion cannot be defeated by a sentence that happens to contain
+# the word "supported", so the two defences fail independently rather than together.
 _FUNDING_AGENCIES = (
     "NSF",
     "DFG",
@@ -402,6 +418,87 @@ _AGENCY_PREFIX_RE = re.compile(
 # bare decimal from end to end.
 _BARE_DECIMAL_CODE_RE = re.compile(r"^\d{1,3}\.\d{1,3}$")
 
+# The SECOND piece of evidence the bare agency-prefix path requires (fix round 5): a
+# funding-context word somewhere in the same sentence as the agency-plus-code match. Four rounds
+# of single-token fixes (MRC/VAST/MOST/ARC, ERC, NRF-2, FNR) all traced back to one root cause --
+# a three-or-four-letter uppercase token sitting next to a number is, on its own, about equally
+# likely to be a grant id, a cell line, a standard, a gene, a part number, a product revision, or
+# a metric. No list of agencies and no shape floor separates those populations, because the shapes
+# genuinely coincide. The surrounding SENTENCE does: every real funding statement contains one of
+# the words below ("This work was supported by NSF-1234567.", "We acknowledge NAFOSTED
+# 103.99-2019.12.") and no methods-section cell-line mention, standards citation, part number, or
+# metric threshold does ("Cells were NIH-3T3 fibroblasts.", "The NASA-STD-3001 limits apply.").
+# This is what lets _FUNDING_AGENCIES grow later without each addition being a new liability.
+#
+# Accepted trade-off, deliberately not special-cased: a bare "NSF-1234567." alone on a line with
+# no funding word anywhere in its sentence is now silent. The explicit grant-phrase path still
+# catches "grant no. X" independently, and a funding statement containing no funding word is not a
+# sentence people write.
+#
+# Vietnamese forms are listed accented AND unaccented, the precedent this feature already follows
+# everywhere else (_ACKNOWLEDGEMENTS_TERMS, _SELF_REFERENCE_RE, _GRANT_PHRASE_RE): Vietnamese
+# authors routinely type without diacritics. Case-insensitive, unlike the agency pattern itself --
+# a funding word is ordinary prose and appears sentence-initial ("Funded by ...") as often as not.
+_FUNDING_CONTEXT_RE = re.compile(
+    r"\b(?:"
+    r"support(?:s|ed|ing)?"
+    r"|fund(?:s|ed|ing)?"
+    r"|grants?"
+    r"|award(?:s|ed)?"
+    r"|grateful"
+    r"|acknowledg(?:e|es|ed|ing|ement|ements|ment|ments)"
+    r"|sponsor(?:s|ed|ship)?"
+    r"|financ(?:e|es|ed|ing|ial)"
+    r"|fellowships?"
+    r"|scholarships?"
+    r"|tài\s+trợ|tai\s+tro"
+    r"|kinh\s+phí|kinh\s+phi"
+    r"|hỗ\s+trợ|ho\s+tro"
+    r"|học\s+bổng|hoc\s+bong"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# What ends a "sentence" for _sentence_bounds: ".", "!", "?", or a blank line. The blank line is
+# there because LaTeX prose ends a thought without a full stop more often than running text does
+# (a funding line of its own between two paragraphs, a list item, a \\-terminated title block), and
+# without it such a line would borrow the previous paragraph's funding word.
+_SENTENCE_BREAK_RE = re.compile(r"[.!?]|\n[^\S\n]*\n")
+
+# Hard cap on how far _sentence_bounds scans in EACH direction from a match. A document with no
+# sentence punctuation at all -- a long table, a base64-encoded blob, a minified data line -- would
+# otherwise make every match scan to the ends of the file, which is quadratic in document length.
+# 400 characters is several times the length of any real funding sentence, so the cap never
+# truncates a sentence that could have mattered; it only bounds the pathological case.
+_CONTEXT_WINDOW = 400
+
+
+def _sentence_bounds(masked: str, start: int, end: int) -> tuple[int, int]:
+    """``(lo, hi)`` offsets of the sentence containing the match at ``[start, end)`` — scanned
+    outward to the nearest ``.``/``!``/``?`` or blank line in each direction, never more than
+    ``_CONTEXT_WINDOW`` characters away. A real sentence boundary, not a raw character window, so
+    a funding word in the *neighbouring* sentence cannot vouch for this match.
+
+    Scanning starts strictly OUTSIDE the match in both directions, which is what makes this safe
+    for the funder forms whose own codes contain dots: ``VINIF.2020.DA15`` and
+    ``NAFOSTED 103.99-2019.12`` would otherwise be read as ending their own sentence partway
+    through themselves."""
+    left_from = max(0, start - _CONTEXT_WINDOW)
+    lo = left_from
+    for break_match in _SENTENCE_BREAK_RE.finditer(masked, left_from, start):
+        lo = break_match.end()
+    right_to = min(len(masked), end + _CONTEXT_WINDOW)
+    break_match = _SENTENCE_BREAK_RE.search(masked, end, right_to)
+    hi = break_match.start() if break_match else right_to
+    return lo, hi
+
+
+def _has_funding_context(masked: str, start: int, end: int) -> bool:
+    """Whether a funding-context word shares a sentence with the match at ``[start, end)``."""
+    lo, hi = _sentence_bounds(masked, start, end)
+    return _FUNDING_CONTEXT_RE.search(masked, lo, hi) is not None
+
+
 # ERC's OWN pattern (fix round 3), stricter than the generic agency-prefix path above for exactly
 # the reason "ERC" is no longer in _FUNDING_AGENCIES: a real European Research Council grant code
 # is "ERC" + a four-digit call year + a separator + a letter programme code ("ERC-2019-ADG",
@@ -410,6 +507,16 @@ _BARE_DECIMAL_CODE_RE = re.compile(r"^\d{1,3}\.\d{1,3}$")
 # separator THEN a letter segment separates the two shapes cleanly: a token id's digits are either
 # not exactly four, or (for "ERC-1155", which happens to be four digits) have no trailing
 # separator-plus-letters to satisfy the rest of the pattern on its own.
+#
+# This path is deliberately EXEMPT from fix round 5's funding-context requirement, for the same
+# reason _GRANT_PHRASE_RE is: it already carries its own second piece of evidence inside the match
+# itself. The generic agency path matches "<3-4 uppercase letters><sep><anything with a digit>",
+# a shape shared with cell lines, standards and part numbers — which is why it needs the sentence
+# to vouch for it. This pattern matches a four-digit call year followed by an uppercase programme
+# code, which is the European Research Council's own citation format and nothing else's; there is
+# no second population to separate it from. Making it conditional on a funding word would buy no
+# precision and would break the pinned bare "ERC-2019-ADG" / "ERC-2021-COG" forms that
+# test_real_grant_codes_still_fire requires.
 #
 # The letter segment is restricted to UPPERCASE ([A-Z], not [A-Za-z]) rather than the dispatch's
 # literal suggestion, because the lowercase form silently reopens the exact bug it was meant to
@@ -468,9 +575,20 @@ def _agency_prefix_hits(masked: str) -> Iterator[tuple[int, str]]:
         # collides with a part number, without needing its own carve-out the way ERC did. Checked
         # against every known-good code before adding this: NSF-1234567 ("1234567"), DFG 123456
         # ("123456"), NAFOSTED 103.99-2019.12, VINIF.2020.DA15, FWF P 12345 ("12345"), and
-        # NRF-2021R1A2C1 ("2021R1A2C1") all clear this floor comfortably.
-        if len(code) >= 4 and any(ch.isdigit() for ch in code):
-            yield match.start(), " ".join(match.group(0).split())
+        # NRF-2021R1A2C1 ("2021R1A2C1") all clear this floor comfortably. Kept alongside the
+        # context requirement below rather than replaced by it: the floor rejects on the code's
+        # own shape and the context requirement on the surrounding sentence, so a sentence that
+        # does contain a funding word still cannot resurrect "NIH-3T3" or "NSF-61".
+        if len(code) < 4 or not any(ch.isdigit() for ch in code):
+            continue
+        # Second-evidence requirement (fix round 5), the structural fix that ends the per-token
+        # series: the agency prefix alone is weak evidence, so the sentence around the match must
+        # also contain a funding-context word. See _FUNDING_CONTEXT_RE for the full reasoning and
+        # the accepted trade-off. Applied here only -- _erc_grant_hits and _grant_phrase_hits each
+        # carry their own evidence inside the match.
+        if not _has_funding_context(masked, match.start(), match.end()):
+            continue
+        yield match.start(), " ".join(match.group(0).split())
 
 
 def _erc_grant_hits(masked: str) -> Iterator[tuple[int, str]]:
