@@ -1,13 +1,32 @@
 import { describe, expect, it } from "vitest";
 import { preflightCopy } from "./preflight-i18n";
 
+/**
+ * Recursively collects every string leaf in a nested copy object, labelled with its dotted path
+ * (e.g. "profile.doubleBlindHint", "rules.crossref.undefined_ref.title") for useful failure
+ * messages. `preflightCopy`'s shape is a tree of plain objects and strings only — no arrays, no
+ * other primitives — so this is exhaustive without needing per-field special-casing.
+ */
+function collectLeafStrings(value: unknown, path: string[] = []): Array<[string, string]> {
+  if (typeof value === "string") return [[path.join("."), value]];
+  if (value && typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>).flatMap(([key, child]) =>
+      collectLeafStrings(child, [...path, key]),
+    );
+  }
+  return [];
+}
+
 describe("preflightCopy", () => {
-  it("gives every rule a non-empty title and hint in both locales", () => {
+  it("gives every leaf string in PreflightCopy a non-empty value in both locales", () => {
+    // Previously this only walked `copy.rules` — `profile.*`, `groupLabel.*`, `skippedReason.*`,
+    // and top-level strings like `clean` (a stated spec requirement) had zero coverage: dropping
+    // a key, or emptying a string, anywhere outside `rules` stayed green. Walking the whole tree
+    // closes that gap for every current and future field at once.
     for (const locale of ["en", "vi"] as const) {
       const copy = preflightCopy(locale);
-      for (const [rule, text] of Object.entries(copy.rules)) {
-        expect(text.title.trim(), `${locale}/${rule} title`).not.toBe("");
-        expect(text.hint.trim(), `${locale}/${rule} hint`).not.toBe("");
+      for (const [path, text] of collectLeafStrings(copy)) {
+        expect(text.trim(), `${locale}/${path}`).not.toBe("");
       }
     }
   });
@@ -33,6 +52,21 @@ describe("preflightCopy", () => {
     const vi = preflightCopy("vi").approximate;
     expect(vi).toMatch(/ước tính/i);
     expect(vi).toMatch(/khác nhau/i);
+  });
+
+  it("says a clean result is not a guarantee of acceptance, in both locales", () => {
+    // Substring checks, same discipline as `approximate` above: ordinary rewording stays green,
+    // but gutting the "mechanical check, not a guarantee" idea — the spec requirement this string
+    // exists to satisfy — must fail.
+    const en = preflightCopy("en").clean;
+    expect(en).toMatch(/no issues/i);
+    expect(en).toMatch(/not a guarantee/i);
+    expect(en).toMatch(/call for papers/i);
+
+    const vi = preflightCopy("vi").clean;
+    expect(vi).toMatch(/không phát hiện/i);
+    expect(vi).toMatch(/chấp nhận/i);
+    expect(vi).toMatch(/mời bài/i);
   });
 
   it("warns about a fresh-from-template draft in both locales (design §7)", () => {

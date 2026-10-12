@@ -1,5 +1,6 @@
 import type { PreflightRuleId, PreflightSeverity } from "@/lib/api/preflight-api";
 import type { UiLanguage } from "@/lib/locale-store";
+import type { PreflightSuppressionReason } from "@/lib/preflight-panel";
 
 export type PreflightRuleCopy = { title: string; hint: string };
 
@@ -29,9 +30,18 @@ export type PreflightCopy = {
   // length without a word limit) — must never read as "this group passed". Generic fallback;
   // `skippedReason` below gives the specific "why" for the two groups that can actually skip.
   skippedGroup: string;
-  // A rule turned off for this report because it would conflict with another finding or setting
-  // (an unresolved \input target, or the double-blind vs. funding-statement conflict).
-  suppressedRule: string;
+  // Short section heading above the skipped-group list (rendered as an uppercase micro-heading,
+  // so it must stay short — the sentence-length copy belongs in `skippedGroup`/`skippedReason`,
+  // not here, or it would read as a sentence shouting in small caps).
+  skippedGroupHeading: string;
+  // Short section heading above the suppressed-rule list — see `skippedGroupHeading`'s note on
+  // why this must stay short rather than being a full sentence.
+  suppressedRuleHeading: string;
+  // Why a specific suppressed rule was turned off, one full sentence per
+  // `PreflightSuppressionReason` (mirrors runner.py's two disjoint suppression sets exactly — see
+  // `preflightSuppressionReason` in preflight-panel.ts). Each reason gets its own sentence so a
+  // reader is never left to guess between two candidate causes at once.
+  suppressedReason: Record<PreflightSuppressionReason, string>;
   // report.no_content: the draft is still empty or a bare template, so every group was skipped
   // for that reason rather than because it was not declared. Distinct message on purpose — see
   // the module docstring in src/services/preflight/runner.py's "no-content path".
@@ -74,8 +84,14 @@ const COPY: Record<UiLanguage, PreflightCopy> = {
       info: "Info",
     },
     skippedGroup: "Not checked — this group wasn't enabled for this submission.",
-    suppressedRule:
-      "Turned off for this report — it would conflict with another setting or an unresolved file.",
+    skippedGroupHeading: "Not checked",
+    suppressedRuleHeading: "Suppressed rules",
+    suppressedReason: {
+      unresolved_includes:
+        "Turned off for this report — it depends on a \\input file that could not be found, so the result would not be reliable.",
+      double_blind_conflict:
+        "Turned off for this report — your venue wants this statement in the camera-ready version, not in a blinded submission, so requiring it here would be contradictory advice.",
+    },
     noContent:
       "Nothing to check yet. The draft is still empty or just the template — every check was skipped for that reason, not because it was turned off.",
     placeholderTemplate:
@@ -246,8 +262,14 @@ const COPY: Record<UiLanguage, PreflightCopy> = {
       info: "Gợi ý",
     },
     skippedGroup: "Chưa kiểm tra — nhóm này chưa được bật cho lần nộp này.",
-    suppressedRule:
-      "Đã tắt cho báo cáo này — vì xung đột với một cài đặt khác hoặc một tệp \\input chưa phân giải được.",
+    skippedGroupHeading: "Chưa kiểm tra",
+    suppressedRuleHeading: "Quy tắc đã tắt",
+    suppressedReason: {
+      unresolved_includes:
+        "Đã tắt cho báo cáo này — mục này phụ thuộc vào một tệp \\input chưa tìm thấy, nên kết quả sẽ không đáng tin cậy.",
+      double_blind_conflict:
+        "Đã tắt cho báo cáo này — tạp chí/hội nghị muốn tuyên bố này xuất hiện ở bản camera-ready, không phải ở bài nộp phản biện kín, nên yêu cầu tuyên bố này ở đây sẽ là lời khuyên mâu thuẫn.",
+    },
     noContent:
       "Chưa có gì để kiểm tra. Bản thảo vẫn còn trống hoặc mới chỉ là mẫu — mọi mục kiểm tra bị bỏ qua vì lý do này, không phải vì bị tắt.",
     placeholderTemplate:

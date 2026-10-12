@@ -11,7 +11,11 @@ import type {
 } from "@/lib/api/preflight-api";
 import { assessManuscriptMaturity } from "@/lib/paper-score";
 import { preflightCopy, type RequiredStatementId } from "@/lib/preflight-i18n";
-import { preflightSuppressionReason } from "@/lib/preflight-panel";
+import {
+  PREFLIGHT_WORD_LIMIT_MAX,
+  preflightSuppressionReason,
+  sanitizeWordLimitInput,
+} from "@/lib/preflight-panel";
 import { cn } from "@/lib/utils";
 
 type PreflightPanelProps = {
@@ -98,15 +102,7 @@ export function PreflightPanel({
   };
 
   const handleWordLimitChange = (raw: string) => {
-    if (raw.trim() === "") {
-      onProfileChange({ ...profile, wordLimit: null });
-      return;
-    }
-    const parsed = Math.floor(Number(raw));
-    onProfileChange({
-      ...profile,
-      wordLimit: Number.isFinite(parsed) ? Math.max(1, parsed) : null,
-    });
+    onProfileChange({ ...profile, wordLimit: sanitizeWordLimitInput(raw) });
   };
 
   return (
@@ -138,6 +134,7 @@ export function PreflightPanel({
           <input
             type="number"
             min={1}
+            max={PREFLIGHT_WORD_LIMIT_MAX}
             inputMode="numeric"
             value={profile.wordLimit ?? ""}
             onChange={(e) => handleWordLimitChange(e.target.value)}
@@ -285,7 +282,7 @@ export function PreflightPanel({
             {report.skipped.length ? (
               <section className="space-y-2">
                 <h3 className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
-                  {t.skippedGroup}
+                  {t.skippedGroupHeading}
                 </h3>
                 <ul className="flex flex-col gap-1.5">
                   {report.skipped.map((group) => (
@@ -304,7 +301,7 @@ export function PreflightPanel({
             {report.suppressed.length ? (
               <section className="space-y-2">
                 <h3 className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
-                  {t.suppressedRule}
+                  {t.suppressedRuleHeading}
                 </h3>
                 <ul className="flex flex-col gap-1.5">
                   {report.suppressed.map((rule) => {
@@ -316,7 +313,7 @@ export function PreflightPanel({
                         className="rounded-md border border-dashed border-border/60 px-3 py-2 text-[11px] text-muted-foreground"
                       >
                         <span className="font-medium text-foreground">{ruleTitleFor(t, rule)}</span>{" "}
-                        — {t.suppressedRule}
+                        — {t.suppressedReason[reason]}
                         {reason === "unresolved_includes" && includes.length
                           ? ` (${includes.join(", ")})`
                           : ""}

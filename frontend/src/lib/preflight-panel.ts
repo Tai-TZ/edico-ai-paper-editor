@@ -81,6 +81,28 @@ export function canJumpToPreflightFinding(
   return finding.line <= preflightLineCount(file.content);
 }
 
+/**
+ * Upper bound for the live word-limit input, mirroring `Field(ge=1, le=100_000)` on
+ * `PreflightProfile.word_limit` (src/models/preflight_schemas.py:29). Without this, typing e.g.
+ * 200000 reaches the backend unclamped and comes back as a generic 422 error banner instead of
+ * being caught here as a field-level hint.
+ */
+export const PREFLIGHT_WORD_LIMIT_MAX = 100_000;
+
+/**
+ * Sanitises the live word-limit input field: an empty (or whitespace-only) string clears the
+ * limit, anything else is floored and clamped to `[1, PREFLIGHT_WORD_LIMIT_MAX]` so the value
+ * handed to `onProfileChange` can never violate the backend's bounds. Non-finite input (e.g. a
+ * bare "-" while typing, or "abc") also falls back to `null` rather than throwing or persisting
+ * `NaN`.
+ */
+export function sanitizeWordLimitInput(raw: string): number | null {
+  if (raw.trim() === "") return null;
+  const parsed = Math.floor(Number(raw));
+  if (!Number.isFinite(parsed)) return null;
+  return Math.min(PREFLIGHT_WORD_LIMIT_MAX, Math.max(1, parsed));
+}
+
 export type PreflightSuppressionReason = "unresolved_includes" | "double_blind_conflict";
 
 /**
