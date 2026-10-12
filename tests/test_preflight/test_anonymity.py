@@ -277,6 +277,34 @@ def test_removed_agencies_are_still_caught_through_the_grant_phrase_path():
         assert "anon.funding_identifiers" in [f.rule for f in out], text
 
 
+def test_token_standards_are_not_grant_numbers():
+    for text in (
+        "We implement an ERC-20 token.",
+        "The ERC-721 standard applies.",
+        "An ERC-1155 multi-token contract.",
+        "The NRF-2 pathway was studied.",
+        "The Nrf2 pathway was studied.",
+        "NRF2 activation was measured.",
+    ):
+        out = check_anonymity(build_source("main.tex", {"main.tex": text + "\n"}))
+        assert "anon.funding_identifiers" not in [f.rule for f in out], text
+
+
+def test_real_grant_codes_still_fire():
+    for text in (
+        "ERC-2019-ADG",
+        "ERC-2021-COG",
+        "NRF-2021R1A2C1",
+        "NSF-1234567",
+        "DFG 123456",
+        "Funded under VINIF.2020.DA15 project.",
+        "Supported by FWF P 12345.",
+        "NAFOSTED 103.99-2019.12",
+    ):
+        out = check_anonymity(build_source("main.tex", {"main.tex": text + "\n"}))
+        assert "anon.funding_identifiers" in [f.rule for f in out], text
+
+
 def test_author_finding_reports_file_line_and_symbol():
     out = check_anonymity(build_source("main.tex", {"main.tex": "Intro.\n\\author{Jane Doe}\n"}))
     hit = next(f for f in out if f.rule == "anon.author_populated")

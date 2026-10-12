@@ -298,11 +298,12 @@ def _check_acknowledgements_present(src: PreflightSource) -> list[Finding]:
 # --- funding identifiers ------------------------------------------------------------------------
 
 # A funding agency's own grant-number shape: the agency's abbreviation, a separator (space or
-# hyphen), then a grant code that contains at least one digit somewhere in it (checked in Python,
-# not the regex, so "ERC-2019-ADG" — digit first, letters after — is accepted same as
-# "NSF-1234567" — digits only). Kept to a fixed, well-known list of funder abbreviations rather
-# than "any short uppercase word + digit", specifically so this never fires on an unrelated
-# acronym-and-number pairing (a model name like "GPT-4", a standard like "ISO-9001").
+# hyphen), then a grant code that is checked in Python (not the regex) against a generic floor --
+# at least 4 characters AND containing a digit somewhere in it (see _agency_prefix_hits) -- so
+# "NSF-1234567" — digits only — is accepted same as a longer mixed code. Kept to a fixed,
+# well-known list of funder abbreviations rather than "any short uppercase word + digit",
+# specifically so this never fires on an unrelated acronym-and-number pairing (a model name like
+# "GPT-4", a standard like "ISO-9001").
 #
 # Deliberately NOT in this list: "MRC", "VAST", "MOST", "ARC". A bare three-letter uppercase token
 # immediately followed by a hyphen and a digit is too common in ordinary scientific prose for this
@@ -315,10 +316,22 @@ def _check_acknowledgements_present(src: PreflightSource) -> list[Finding]:
 # (_GRANT_PHRASE_RE) -- "Funded by the MRC under grant 12345" or "the ARC, grant no. DP123456"
 # still fire, because that path requires an actual grant-phrase ("grant no.", "under grant", ...)
 # and so cannot collide with lab terminology the way a bare agency-prefix match can.
+#
+# Also NOT in this list (fix round 3): "ERC". The European Research Council's own grant codes
+# ("ERC-2019-ADG", "ERC-2021-COG") collide, on this generic path, with the Ethereum token-standard
+# names "ERC-20" / "ERC-721" / "ERC-1155" -- ubiquitous in blockchain/Web3/smart-contract papers,
+# and a bigger cry-wolf risk than MRC-5 given this product's CS-heavy audience. Unlike MRC/VAST/
+# MOST/ARC, ERC cannot simply drop to the grant-phrase-only path and be done with it, because a
+# pinned test (test_dfg_and_erc_grant_shapes_are_recognised) requires the bare "ERC-2019-ADG" form
+# (no grant-phrase word anywhere near it) to keep firing. So ERC gets its OWN stricter pattern
+# below (_ERC_GRANT_RE) instead: real ERC codes carry a four-digit call year followed by a
+# separator and a multi-letter programme code (STG/COG/ADG/SyG, or occasionally longer); a token
+# id is a bare one-to-four-digit number with nothing after it. Requiring the trailing letter
+# segment is what separates "ERC-2019-ADG" from "ERC-20"/"ERC-721"/"ERC-1155" -- none of the token
+# ids have (or could sensibly gain) a letter segment after their number.
 _FUNDING_AGENCIES = (
     "NSF",
     "DFG",
-    "ERC",
     "NIH",
     "DARPA",
     "ONR",
@@ -365,6 +378,25 @@ _AGENCY_PREFIX_RE = re.compile(
     r"\b(?:" + "|".join(_FUNDING_AGENCIES) + r")[\s.-]+(?:[A-Za-z]{1,2}[\s.-]+)?([A-Za-z0-9][\w.-]*)\b"
 )
 
+# ERC's OWN pattern (fix round 3), stricter than the generic agency-prefix path above for exactly
+# the reason "ERC" is no longer in _FUNDING_AGENCIES: a real European Research Council grant code
+# is "ERC" + a four-digit call year + a separator + a letter programme code ("ERC-2019-ADG",
+# "ERC-2021-COG", "ERC-2018-STG"); an Ethereum token-standard name is "ERC" + a bare one-to-four-
+# digit number with nothing after it ("ERC-20", "ERC-721", "ERC-1155"). Requiring \d{4} THEN a
+# separator THEN a letter segment separates the two shapes cleanly: a token id's digits are either
+# not exactly four, or (for "ERC-1155", which happens to be four digits) have no trailing
+# separator-plus-letters to satisfy the rest of the pattern on its own.
+#
+# The letter segment is restricted to UPPERCASE ([A-Z], not [A-Za-z]) rather than the dispatch's
+# literal suggestion, because the lowercase form silently reopens the exact bug it was meant to
+# close: in prose, "An ERC-1155 multi-token contract." has a space after "1155" (a valid separator
+# under [\s.-]+) immediately followed by the ordinary lowercase word "multi" — which satisfies
+# [A-Za-z]{2,} and makes the whole pattern match "ERC-1155 multi", a false positive on one of the
+# dispatch's own pinned negative cases. ERC programme codes are always written uppercase in
+# citations (STG/COG/ADG/SyG/POC), so requiring uppercase keeps every real form working while an
+# ordinary lowercase word immediately after a token id's number can never satisfy it.
+_ERC_GRANT_RE = re.compile(r"\bERC[\s.-]+(\d{4}[\s.-]+[A-Z]{2,})\b")
+
 # A bare four-digit number ("2024") must never match this rule on its own — it is a year, not a
 # grant — so every alternative below requires either a known agency prefix (above) or an explicit
 # grant-number PHRASE, never a number in isolation. The English phrases capture their trailing code
@@ -395,8 +427,22 @@ _GRANT_PHRASE_RE = re.compile(
 
 def _agency_prefix_hits(masked: str) -> Iterator[tuple[int, str]]:
     for match in _AGENCY_PREFIX_RE.finditer(masked):
-        if any(ch.isdigit() for ch in match.group(1)):
+        code = match.group(1)
+        # Generic floor (fix round 3): the captured code must be at least 4 characters AND contain
+        # a digit. This is what stops this rule from being fixed one collision at a time -- it
+        # kills "NRF-2" (the Nrf2 redox-biology pathway, written hyphenated in all caps: code "2",
+        # length 1) generically, and would do the same for the next three-letter agency that
+        # collides with a part number, without needing its own carve-out the way ERC did. Checked
+        # against every known-good code before adding this: NSF-1234567 ("1234567"), DFG 123456
+        # ("123456"), NAFOSTED 103.99-2019.12, VINIF.2020.DA15, FWF P 12345 ("12345"), and
+        # NRF-2021R1A2C1 ("2021R1A2C1") all clear this floor comfortably.
+        if len(code) >= 4 and any(ch.isdigit() for ch in code):
             yield match.start(), " ".join(match.group(0).split())
+
+
+def _erc_grant_hits(masked: str) -> Iterator[tuple[int, str]]:
+    for match in _ERC_GRANT_RE.finditer(masked):
+        yield match.start(), " ".join(match.group(0).split())
 
 
 def _grant_phrase_hits(masked: str) -> Iterator[tuple[int, str]]:
@@ -416,6 +462,7 @@ def _check_funding_identifiers(src: PreflightSource) -> list[Finding]:
     first: tuple[str, int, str] | None = None
     for path, masked in src.iter_masked():
         hits = list(_agency_prefix_hits(masked))
+        hits.extend(_erc_grant_hits(masked))
         hits.extend(_grant_phrase_hits(masked))
         for offset, symbol in sorted(hits):
             count += 1
