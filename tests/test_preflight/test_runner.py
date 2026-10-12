@@ -159,17 +159,20 @@ def test_exact_ordered_findings_and_counts_for_a_document_hitting_several_groups
         ("critical", "crossref.undefined_ref:0"),
         ("critical", "format.compressed_leading:0"),
         ("critical", "anon.author_populated:0"),
-        ("critical", "length.over_limit:0"),
         ("warning", "bib.missing_required_field:0"),
         ("warning", "bib.missing_required_field:1"),
         ("warning", "statement.data_availability_missing:0"),
         ("warning", "statement.ethics_missing:0"),
         ("warning", "statement.coi_missing:0"),
+        # length.over_limit was `critical` (and so sat in the first band) until the final
+        # whole-branch review demoted it to `warning` -- ruling 29. In the warning band the stable
+        # sort keeps it last, because `length` is the last group the runner appends.
+        ("warning", "length.over_limit:0"),
         ("info", "crossref.unused_label:0"),
         ("info", "bib.missing_doi:0"),
         ("info", "bib.uncited_entry:0"),
     ]
-    assert rep.counts == {"critical": 4, "warning": 5, "info": 3}
+    assert rep.counts == {"critical": 3, "warning": 6, "info": 3}
     # statement.funding_missing is suppressed (double-blind, "funding" IS required here) -- not a
     # gap in the pinned list above, so pin it explicitly too.
     assert rep.suppressed == ["statement.funding_missing"]
@@ -324,3 +327,72 @@ def test_within_bounds_passes_a_none_line_through_untouched():
 def test_within_bounds_passes_an_unresolvable_file_through_rather_than_guessing():
     finding = Finding(rule="crossref.undefined_ref", file="ghost.tex", line=100)
     assert _within_bounds(finding, {"main.tex": 3}) is True
+
+
+# --- final whole-branch review, FIX 3: an unexamined payload file suppresses the same rules ------
+
+
+def _two_file_req(command):
+    return PreflightRequest(
+        main_file="main.tex",
+        files=[
+            PreflightFile(
+                path="main.tex",
+                content=f"\\begin{{document}}\n{command}\nSee \\ref{{fig:one}} and \\ref{{tab:two}}.\n\\end{{document}}\n",
+            ),
+            PreflightFile(path="sections/intro.tex", content="\\label{fig:one}\n\\label{tab:two}\nprose\n"),
+        ],
+    )
+
+
+def test_an_unexamined_payload_file_suppresses_the_cross_file_rules():
+    # \subfile and \InputIfFileExists leave sections/intro.tex unread even though it is right
+    # there in the payload. Before FIX 3 every bookkeeping field stayed empty and the runner
+    # reported two `critical` undefined refs over labels it had never opened -- the exact
+    # inversion of spec §4.3's "thà im lặng còn hơn bắn critical dựa trên dữ liệu thiếu".
+    for command in ("\\subfile{sections/intro}", "\\InputIfFileExists{sections/intro.tex}{}{}"):
+        rep = run_preflight(_two_file_req(command))
+        assert [f for f in rep.findings if f.severity == "critical"] == [], command
+        assert rep.unexamined_files == ["sections/intro.tex"], command
+        assert rep.unresolved_includes == [], command
+        assert rep.suppressed == ["crossref.undefined_ref", "bib.uncited_entry"], command
+
+
+def test_a_resolved_input_graph_still_reports_a_real_undefined_ref_as_critical():
+    # The true-positive control for the suppression above.
+    rep = run_preflight(_two_file_req("\\input{sections/intro}"))
+    assert rep.unexamined_files == []
+    assert rep.suppressed == []
+    rep = run_preflight(
+        PreflightRequest(
+            main_file="main.tex",
+            files=[
+                PreflightFile(
+                    path="main.tex",
+                    content="\\begin{document}\n\\input{sections/intro}\nSee \\ref{fig:typo}.\n\\end{document}\n",
+                ),
+                PreflightFile(path="sections/intro.tex", content="\\label{fig:one}\nprose\n"),
+            ],
+        )
+    )
+    assert [(f.severity, f.rule, f.symbol) for f in rep.findings if f.severity == "critical"] == [
+        ("critical", "crossref.undefined_ref", "fig:typo")
+    ]
+
+
+def test_both_cross_file_causes_are_reported_in_their_own_fields():
+    rep = run_preflight(
+        PreflightRequest(
+            main_file="main.tex",
+            files=[
+                PreflightFile(
+                    path="main.tex",
+                    content="\\begin{document}\n\\input{sections/gone}\n\\subfile{sections/intro}\n\\end{document}\n",
+                ),
+                PreflightFile(path="sections/intro.tex", content="\\label{fig:one}\nprose\n"),
+            ],
+        )
+    )
+    assert rep.unresolved_includes == ["sections/gone.tex"]
+    assert rep.unexamined_files == ["sections/intro.tex"]
+    assert rep.suppressed == ["crossref.undefined_ref", "bib.uncited_entry"]

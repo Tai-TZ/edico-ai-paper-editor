@@ -126,12 +126,22 @@ tác giả không tưởng là bỏ sót.
 
 | Rule id | Severity | Phát hiện |
 |---|---|---|
-| `length.over_limit` | critical | Word count body > limit |
+| `length.over_limit` | warning | Word count body > limit |
 | `length.near_limit` | info | Trong khoảng 95–100% limit |
 
-Word count **bỏ**: comment, preamble, `\bibliography`, math inline/display. **Tính**: caption
-(phần lớn venue tính caption vào tổng). Vì mỗi venue đếm một kiểu, UI phải nói rõ con số này
-là xấp xỉ, chỉ dùng để cảnh báo sớm — không phải con số venue sẽ đo.
+`length.over_limit` là **warning**, không phải critical (sửa ở final whole-branch review,
+Ruling 29): bảng này bản đầu ghi critical nhưng mâu thuẫn với chính đoạn prose ngay dưới — con số
+là *xấp xỉ* — và §3 đã ra nguyên tắc quyết định: luật heuristic không được ở `critical`. Đo thực
+tế: 320 từ prose thật + một `eqnarray` + ba bảng kết quả đếm ra 428 so với limit 400, tức critical
+trên bài đang dưới limit 20%. Một hàng critical mà ngay bên dưới hiển thị "con số này chỉ là ước
+tính" là copy tự mâu thuẫn.
+
+Word count **bỏ**: comment, preamble, `\bibliography`, math inline/display (đủ cả bộ environment
+display math — `equation`, `eqnarray`, `align`, `alignat`, `flalign`, `gather`, `multline`,
+`IEEEeqnarray`, kèm dạng có dấu sao, cùng `subequations`/`displaymath`/`math`). **Tính**: caption
+(phần lớn venue tính caption vào tổng), và cả nội dung `tabular` — đây là văn bản mà venue có thể
+đếm, nên không strip. Vì mỗi venue đếm một kiểu, UI phải nói rõ con số này là xấp xỉ, chỉ dùng để
+cảnh báo sớm — không phải con số venue sẽ đo.
 
 ## 4. Backend
 

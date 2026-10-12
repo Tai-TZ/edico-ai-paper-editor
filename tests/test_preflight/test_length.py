@@ -29,7 +29,10 @@ def test_included_file_words_are_counted():
     assert count_body_words(build_source("main.tex", files)) == 2
 
 
-def test_over_limit_is_critical_and_carries_the_count():
+def test_over_limit_fires_and_carries_the_count():
+    # Renamed in the final whole-branch review: length.over_limit is `warning`, not `critical`
+    # (ruling 29). check_length never assigned a severity, so the old name only ever described
+    # the catalogue -- which test_catalogue.py pins, and which this test must not restate wrongly.
     doc = "\\begin{document}\n" + "word " * 50 + "\n\\end{document}\n"
     out = check_length(_src(doc), 10)
     assert [(f.rule, f.count) for f in out] == [("length.over_limit", 50)]
@@ -140,3 +143,60 @@ def test_real_inline_math_is_still_stripped():
 def test_display_math_still_stripped():
     doc = "\\begin{document}\nBefore $$a + b = c$$ after.\n\\end{document}\n"
     assert count_body_words(_src(doc)) == 2
+
+
+# --- final whole-branch review, FIX 4b: every display-math environment must be stripped ---------
+
+# One 148-character display equation. Counted as prose it reads as 16-18 words; stripped, the
+# surrounding six-word sentence is all that is left. Before this fix only the first six
+# environments below were stripped, so an `eqnarray` paper's estimate ran ~20% high -- and
+# length.over_limit used to be `critical`.
+_DISPLAY_EQUATION = (
+    "x = \\sum_{i=1}^{n} \\alpha_i \\beta_i + \\gamma \\delta \\epsilon \\zeta "
+    "\\eta \\theta_i^{(k)} \\mathcal{N}(0,1) \\quad \\text{for all} \\quad i \\in \\mathcal{I}"
+)
+
+_MATH_ENVIRONMENTS = (
+    "equation",
+    "equation*",
+    "align",
+    "align*",
+    "gather",
+    "multline",
+    "eqnarray",
+    "eqnarray*",
+    "gather*",
+    "multline*",
+    "flalign",
+    "flalign*",
+    "alignat",
+    "alignat*",
+    "IEEEeqnarray",
+    "IEEEeqnarray*",
+    "subequations",
+    "displaymath",
+    "math",
+)
+
+
+def test_every_display_math_environment_is_stripped_from_the_count():
+    for env in _MATH_ENVIRONMENTS:
+        doc = (
+            "\\begin{document}\nOne two three four five six.\n"
+            f"\\begin{{{env}}}\n{_DISPLAY_EQUATION}\n\\end{{{env}}}\n"
+            "\\end{document}\n"
+        )
+        assert count_body_words(_src(doc)) == 6, env
+
+
+def test_an_eqnarray_paper_under_the_limit_does_not_report_an_overrun():
+    # The end-to-end shape the reviewer measured: real prose plus one eqnarray against a limit the
+    # prose alone is comfortably under.
+    doc = (
+        "\\begin{document}\n"
+        + "word " * 320
+        + f"\n\\begin{{eqnarray}}\n{_DISPLAY_EQUATION}\n\\end{{eqnarray}}\n"
+        + "\\end{document}\n"
+    )
+    assert count_body_words(_src(doc)) == 320
+    assert check_length(_src(doc), 400) == []

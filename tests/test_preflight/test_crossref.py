@@ -90,3 +90,30 @@ def test_undefined_ref_is_reported_once_per_key_with_an_occurrence_count():
     assert out[0].symbol == "fig:a"
     assert out[0].count == 3
     assert out[0].line == 1
+
+
+# --- final whole-branch review, FIX 6: a reference key that is a macro expansion -----------------
+
+
+def test_a_reference_key_containing_a_macro_is_not_an_undefined_ref():
+    # \ref{\figlabel} and \ref{fig:a\arabic{n}} expand at compile time to something this static
+    # analysis cannot know, so they can never be matched against a literal \label -- reporting
+    # them as undefined is a `critical` on a document that is very likely correct.
+    for doc in ("See \\ref{\\figlabel}.\n", "See \\ref{fig:a\\arabic{n}}.\n"):
+        assert _rules(doc) == [], doc
+
+
+def test_a_label_whose_key_contains_a_macro_is_neither_duplicate_nor_unused():
+    doc = "\\label{fig:a\\arabic{n}}\n\\label{fig:a\\arabic{n}}\n"
+    assert _rules(doc) == []
+
+
+def test_a_literal_key_next_to_a_macro_key_is_still_reported():
+    # The skip must be per key, not per \cref: fig:real is a literal key with no label.
+    out = check_crossref(build_source("main.tex", {"main.tex": "See \\cref{\\macrokey,fig:real}.\n"}))
+    assert [(f.rule, f.symbol) for f in out] == [("crossref.undefined_ref", "fig:real")]
+
+
+def test_a_ref_inside_a_comment_on_a_verbatim_begin_line_is_not_a_finding():
+    # Final whole-branch review, FIX 5: see test_source.py's companion masking tests.
+    assert _rules("\\begin{verbatim} % see \\ref{fig:nonexistent}\ncode\n\\end{verbatim}\n") == []

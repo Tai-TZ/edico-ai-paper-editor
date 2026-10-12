@@ -68,6 +68,11 @@ export type PreflightReport = {
   skipped: string[];
   suppressed: string[];
   unresolved_includes: string[];
+  // .tex files the request DID send that the \input/\include graph never reached, so nothing read
+  // them (a \subfile / \import / \InputIfFileExists / \includeonly project, a conditional or
+  // macro-wrapped include, or a stray unused file). Suppresses the same cross-file rules as
+  // `unresolved_includes`, but must be worded differently — these files are not missing.
+  unexamined_files: string[];
   // True when there was nothing to analyse at all (no files, or every resolved file is blank or
   // comment-only once masked). Distinct from `skipped`, which means "not declared" — a panel that
   // only checks `skipped.length` would render an empty draft as if every rule had passed.

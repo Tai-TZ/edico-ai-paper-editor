@@ -15,6 +15,12 @@ place owns it instead of it being scattered (and duplicated, and drifted) across
   - ``src.unresolved_includes`` non-empty: a ``\\input``-ed file is missing, so every label and
     citation in it is invisible to the rules that see the whole source. ``crossref.undefined_ref``
     and ``bib.uncited_entry`` are dropped.
+  - ``src.unexamined_files`` non-empty: same consequence from the opposite cause — a ``.tex`` file
+    the payload *did* supply was never reached by the include graph (``\\subfile``, ``\\import``,
+    ``\\InputIfFileExists``, a conditional or macro-wrapped include, or a stray unused file), so
+    its labels and citations went unread. The same two rules are dropped, for the same reason, and
+    recorded in ``report.suppressed`` the same way; the two causes are kept in separate report
+    fields so the panel can word them differently.
   - ``profile.double_blind`` is true: a venue wants a funding / author-contributions statement in
     the camera-ready, not the blinded submission, so demanding it here while also flagging
     acknowledgements as an identity leak would be contradictory advice. ``statement.funding_missing``
@@ -45,7 +51,9 @@ own field, ``report.no_content``, and short-circuits everything else: no finding
 suppressed out of it — that would tell the panel two contradictory things about the same group).
 ``unresolved_includes`` is still populated when that is *why* there was nothing (an empty
 ``files`` list or a missing ``main_file``), since it becomes the only explanation the panel has
-for an entirely empty report.
+for an entirely empty report. ``unexamined_files`` rides along on the same reasoning: when
+``main_file`` is absent from a non-empty payload, every ``.tex`` the caller did send went unread,
+and saying so is the only honest account of that report.
 """
 
 from __future__ import annotations
@@ -63,8 +71,9 @@ from src.services.preflight.source import PreflightSource, build_source
 # Severity sort key — critical first, then warning, then info.
 _SEVERITY_ORDER: tuple[str, ...] = ("critical", "warning", "info")
 
-# Suppressed when the project is incomplete (spec §3.1/§3.2 vs. the "missing \\input target"
-# conflict): see the module docstring's "Suppression" bullet.
+# Suppressed when part of the project went unread -- either a \\input target is missing from the
+# payload, or a payload .tex file was never reached by the include graph. Both are the same
+# conflict with spec §3.1/§3.2: see the module docstring's "Suppression" bullets.
 _CROSS_FILE_SUPPRESSED_RULES: tuple[str, ...] = ("crossref.undefined_ref", "bib.uncited_entry")
 
 # Suppressed under double-blind review (spec §3.5's conflict with §3.3).
@@ -91,6 +100,7 @@ def _no_content_report(src: PreflightSource) -> PreflightReport:
         skipped=list(PREFLIGHT_GROUPS),
         suppressed=[],
         unresolved_includes=list(src.unresolved_includes),
+        unexamined_files=list(src.unexamined_files),
         no_content=True,
     )
 
@@ -101,7 +111,8 @@ def run_preflight(request: PreflightRequest) -> PreflightReport:
     Never raises on an odd document: an empty ``files`` list, a ``main_file`` absent from
     ``files``, empty file content, and a request with no profile fields set all still produce a
     report, because this is called straight from an HTTP handler and a 500 here is strictly worse
-    than an incomplete-looking report that explains itself via ``skipped``/``unresolved_includes``.
+    than an incomplete-looking report that explains itself via
+    ``skipped``/``unresolved_includes``/``unexamined_files``.
     """
     files = {file.path: file.content for file in request.files}
     src = build_source(request.main_file, files)
@@ -138,7 +149,7 @@ def run_preflight(request: PreflightRequest) -> PreflightReport:
 
     suppressed: list[str] = []
     suppressed_rules: set[str] = set()
-    if src.unresolved_includes:
+    if src.unresolved_includes or src.unexamined_files:
         suppressed.extend(_CROSS_FILE_SUPPRESSED_RULES)
         suppressed_rules.update(_CROSS_FILE_SUPPRESSED_RULES)
     if profile.double_blind:
@@ -195,6 +206,7 @@ def run_preflight(request: PreflightRequest) -> PreflightReport:
         skipped=skipped,
         suppressed=suppressed,
         unresolved_includes=list(src.unresolved_includes),
+        unexamined_files=list(src.unexamined_files),
         no_content=False,
     )
 

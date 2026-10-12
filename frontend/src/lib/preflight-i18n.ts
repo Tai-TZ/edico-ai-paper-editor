@@ -38,9 +38,12 @@ export type PreflightCopy = {
   // why this must stay short rather than being a full sentence.
   suppressedRuleHeading: string;
   // Why a specific suppressed rule was turned off, one full sentence per
-  // `PreflightSuppressionReason` (mirrors runner.py's two disjoint suppression sets exactly — see
-  // `preflightSuppressionReason` in preflight-panel.ts). Each reason gets its own sentence so a
-  // reader is never left to guess between two candidate causes at once.
+  // `PreflightSuppressionReason` (mirrors runner.py's suppression sets exactly — see
+  // `preflightSuppressionReason` and `preflightCrossFileCauses` in preflight-panel.ts). Each
+  // reason gets its own sentence so a reader is never left to guess between candidate causes at
+  // once — including the two cross-file causes, which suppress the identical rule ids but are NOT
+  // the same event: `unresolved_includes` is a file that is missing, `unexamined_files` is a file
+  // that is right there and was never read.
   suppressedReason: Record<PreflightSuppressionReason, string>;
   // report.no_content: the draft is still empty or a bare template, so every group was skipped
   // for that reason rather than because it was not declared. Distinct message on purpose — see
@@ -89,6 +92,8 @@ const COPY: Record<UiLanguage, PreflightCopy> = {
     suppressedReason: {
       unresolved_includes:
         "Turned off for this report — it depends on a \\input file that could not be found, so the result would not be reliable.",
+      unexamined_files:
+        "Turned off for this report — your project has a .tex file that the main file never pulls in with \\input or \\include, so nothing read its labels or citations and the result would not be reliable.",
       double_blind_conflict:
         "Turned off for this report — your venue wants this statement in the camera-ready version, not in a blinded submission, so requiring it here would be contradictory advice.",
     },
@@ -267,6 +272,8 @@ const COPY: Record<UiLanguage, PreflightCopy> = {
     suppressedReason: {
       unresolved_includes:
         "Đã tắt cho báo cáo này — mục này phụ thuộc vào một tệp \\input chưa tìm thấy, nên kết quả sẽ không đáng tin cậy.",
+      unexamined_files:
+        "Đã tắt cho báo cáo này — trong dự án có tệp .tex mà tệp chính không nạp qua \\input hay \\include, nên chưa có gì đọc các nhãn và trích dẫn trong đó, kết quả sẽ không đáng tin cậy.",
       double_blind_conflict:
         "Đã tắt cho báo cáo này — tạp chí/hội nghị muốn tuyên bố này xuất hiện ở bản camera-ready, không phải ở bài nộp phản biện kín, nên yêu cầu tuyên bố này ở đây sẽ là lời khuyên mâu thuẫn.",
     },

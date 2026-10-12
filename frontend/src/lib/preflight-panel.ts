@@ -8,6 +8,30 @@ import type {
   PreflightFinding,
   PreflightProfileInput,
 } from "@/lib/api/preflight-api";
+import { isBibFile } from "@/lib/project-store";
+
+/**
+ * Every `.bib` in the project, concatenated, for `PreflightRequest.bib_content`.
+ *
+ * A single `.find()` here used to take whichever `.bib` happened to be first in array order and
+ * silently discard the rest, so a paper with `refs.bib` + `extra.bib` and
+ * `\bibliography{refs,extra}` reported `bib.cite_key_missing` at `critical` for every key living
+ * in the dropped file — a false critical on a correct document, and on a layout the rest of the
+ * product supports everywhere else (`overleaf-import.ts` and `latex-import.ts` import all `.bib`
+ * files; `getCompilePayload` in project-store.ts ships all of them to the compiler). Which `.bib`
+ * got picked was not visible to the author anywhere.
+ *
+ * Concatenation is safe for the one consumer that reads this: `parse_bib_entries`
+ * (src/services/parser/latex.py) parses a BibTeX stream, and entries from two files are exactly a
+ * longer stream. A duplicate key defined in two files stays visible to `bib.duplicate_entry`,
+ * which is the correct report for that project.
+ */
+export function collectPreflightBibContent(files: PreflightFileInput[]): string {
+  return files
+    .filter((file) => isBibFile(file.path))
+    .map((file) => file.content)
+    .join("\n");
+}
 
 export const DEFAULT_PREFLIGHT_PROFILE: PreflightProfileInput = {
   doubleBlind: false,
@@ -103,16 +127,54 @@ export function sanitizeWordLimitInput(raw: string): number | null {
   return Math.min(PREFLIGHT_WORD_LIMIT_MAX, Math.max(1, parsed));
 }
 
-export type PreflightSuppressionReason = "unresolved_includes" | "double_blind_conflict";
+export type PreflightSuppressionReason =
+  "unresolved_includes" | "unexamined_files" | "double_blind_conflict";
+
+/** The two reasons a cross-file suppression can have — see `preflightCrossFileCauses`. */
+export type PreflightCrossFileCause = Exclude<PreflightSuppressionReason, "double_blind_conflict">;
 
 /**
- * Why a rule in `report.suppressed` was turned off. `runner.py` suppresses exactly two disjoint,
- * fixed rule-id sets (`_CROSS_FILE_SUPPRESSED_RULES` for a missing \input target,
- * `_DOUBLE_BLIND_SUPPRESSED_RULES` for the double-blind vs. funding-statement conflict — spec
- * §3.5), so the rule id alone determines which reason applies; no extra report field needed.
+ * Which FAMILY of suppression a rule in `report.suppressed` belongs to. `runner.py` suppresses
+ * exactly two disjoint, fixed rule-id sets (`_CROSS_FILE_SUPPRESSED_RULES` when part of the
+ * project went unread, `_DOUBLE_BLIND_SUPPRESSED_RULES` for the double-blind vs.
+ * funding-statement conflict — spec §3.5), so the rule id alone decides the family.
+ *
+ * It does NOT decide the cross-file family's concrete cause: a missing \input target and a
+ * payload file the include graph never reached suppress the identical rule ids, and only the
+ * report's own two fields tell them apart. `preflightCrossFileCauses` does that half.
  */
-export function preflightSuppressionReason(rule: string): PreflightSuppressionReason {
+export function preflightSuppressionReason(
+  rule: string,
+): "unresolved_includes" | "double_blind_conflict" {
   return rule.startsWith("crossref.") || rule.startsWith("bib.")
     ? "unresolved_includes"
     : "double_blind_conflict";
+}
+
+/**
+ * The concrete cause(s) behind a cross-file suppression, in the order the panel should read them.
+ * Both can apply at once (a project with a missing \input AND a \subfile-wired section), and
+ * each gets its own sentence rather than one message hedging between them.
+ *
+ * Returns `["unresolved_includes"]` when both lists are empty. That report shape cannot occur —
+ * `runner.py` only suppresses these rules when at least one of the two fields is non-empty — but
+ * returning an empty array would leave the panel rendering a rule name followed by no reason at
+ * all, which is worse than the generic sentence.
+ */
+export function preflightCrossFileCauses(report: {
+  unresolved_includes: string[];
+  unexamined_files: string[];
+}): PreflightCrossFileCause[] {
+  const causes: PreflightCrossFileCause[] = [];
+  if (report.unresolved_includes.length) causes.push("unresolved_includes");
+  if (report.unexamined_files.length) causes.push("unexamined_files");
+  return causes.length ? causes : ["unresolved_includes"];
+}
+
+/** The file list the panel appends after a cross-file cause's sentence. */
+export function preflightCrossFileCauseFiles(
+  cause: PreflightCrossFileCause,
+  report: { unresolved_includes: string[]; unexamined_files: string[] },
+): string[] {
+  return cause === "unresolved_includes" ? report.unresolved_includes : report.unexamined_files;
 }

@@ -17,8 +17,8 @@ The nine rules, each a short independent scan:
 
 - ``anon.author_populated`` / ``anon.affiliation_populated`` (``critical``): ``\\author``, and
   ``\\institute``/``\\affiliation``/``\\affil``, are allowed to be *present* — every double-blind
-  template still puts the command in the source — but their argument must be a recognised
-  anonymous placeholder (see ``_ANONYMOUS_PLACEHOLDERS``), not a real name or institution. A
+  template still puts the command in the source — but their argument must read as an anonymised
+  value (see ``_is_anonymous_placeholder``), not a real name or institution. A
   value that is nothing but LaTeX commands with no visible text (a venue's own anonymising macro,
   e.g. ``\\author{\\anonymousauthors}``) is treated as anonymised rather than as a leak, because a
   false critical here is the worst possible outcome in the whole feature: it would tell an author
@@ -147,17 +147,46 @@ _LINEBREAK_RE = re.compile(r"\\\\\*?(?:\[[^\]]*\])?|\\newline\b|\\par\b")
 # left over once this is removed, which is exactly the "anonymised" case, not a leak.
 _COMMAND_TOKEN_RE = re.compile(r"\\[A-Za-z]+\*?")
 
-# The anonymous-placeholder values a double-blind template actually uses. Compared against the
-# argument's visible text, case-insensitively, after stripping markup and collapsing whitespace.
-_ANONYMOUS_PLACEHOLDERS = frozenset(
+# Substrings that mark an author/affiliation block as deliberately anonymised. Matched as
+# SUBSTRINGS of the argument's lowercased visible text, never by whole-value equality: every major
+# venue's anonymous template wraps its marker in extra prose that authors are explicitly
+# instructed to leave alone ("Anonymous ACL submission", "Anonymous CVPR submission \\ Paper ID
+# \cvprPaperID", "Anonymous Author(s) \\ Affiliation \\ Address \\ \texttt{email@domain}"), so an
+# equality test fires `critical` on the correct, intended final state of the document -- the one
+# outcome this module's docstring names as the worst in the whole feature.
+_ANONYMOUS_MARKERS = frozenset(
     {
-        "",
         "anonymous",
-        "anonymous author",
-        "anonymous authors",
         "anon.",
+        "withheld",
+        "redacted",
+        "blinded",
+        "double-blind",
+        "removed for",
+        "paper id",
     }
 )
+
+# The placeholder author names shipped by this product's own templates and seeds -- a document
+# nobody has filled in yet is not an identity leak. KEEP IN STEP BY HAND with PLACEHOLDER_MARKERS
+# in frontend/src/lib/paper-score.ts (which carries /\\author\{author name\}/i and
+# /\\author\{tên tác giả\}/i): that is the frontend's own placeholder detector, it cannot be
+# imported from Python, and nothing fails if the two drift. "ten tac gia" is the unaccented
+# spelling authors type without a Vietnamese keyboard; "first author" comes from the Springer seed
+# in src/services/template_builtins.py.
+_PLACEHOLDER_AUTHOR_MARKERS = frozenset(
+    {
+        "author name",
+        "tên tác giả",
+        "ten tac gia",
+        "first author",
+        "your name",
+    }
+)
+
+# One flat lookup for the predicate below; the two sets above stay separate because they have
+# different owners (venue templates vs. this repo's own seeds) and drift for different reasons.
+_ANONYMISED_VALUE_MARKERS = _ANONYMOUS_MARKERS | _PLACEHOLDER_AUTHOR_MARKERS
 
 
 def _visible_text(raw: str) -> str:
@@ -173,7 +202,17 @@ def _visible_text(raw: str) -> str:
 
 
 def _is_anonymous_placeholder(raw: str) -> bool:
-    return _visible_text(raw).lower() in _ANONYMOUS_PLACEHOLDERS
+    """``True`` when ``raw`` reads as a deliberately anonymised (or not-yet-filled-in) value.
+
+    Three ways to qualify, in order of cost: no visible text at all (a venue's own anonymising
+    macro, ``\\author{\\anonymousauthors}`` -- pure markup, nothing a reader would see); an
+    anonymity marker anywhere in the visible text; or one of this product's own template
+    placeholder names. A real name ("Jane Doe") matches none of the three and still fires.
+    """
+    visible = _visible_text(raw).lower()
+    if not visible:
+        return True
+    return any(marker in visible for marker in _ANONYMISED_VALUE_MARKERS)
 
 
 def _check_author_or_affiliation(src: PreflightSource, command_re: re.Pattern[str], rule: str) -> list[Finding]:

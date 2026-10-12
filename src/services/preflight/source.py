@@ -10,6 +10,10 @@ _BEGIN_VERBATIM_RE = re.compile(r"\\begin\{(verbatim|Verbatim|lstlisting|minted|
 _END_ENV_RE = re.compile(r"\\end\{([^}]*)\}")
 # \input{target} / \include{target} — read off the masked text so commented-out includes are invisible.
 _INPUT_RE = re.compile(r"\\(?:input|include)\{([^}]+)\}")
+# Payload entries that hold LaTeX source, i.e. the ones whose labels, citations and bib keys the
+# rules are entitled to see. Anything else in a payload (a .bib, a .cls, a .sty) is not source the
+# include graph is supposed to reach, so its absence from that graph means nothing.
+_TEX_EXTENSIONS = frozenset({".tex", ".latex"})
 
 
 @dataclass(frozen=True)
@@ -24,6 +28,8 @@ class PreflightSource:
     main_file: str
     files: tuple[SourceFile, ...]  # in \input-resolution order, main first
     unresolved_includes: tuple[str, ...]  # \input targets absent from the payload, and cycles
+    # LaTeX files the payload DID supply that the include graph never reached — see build_source.
+    unexamined_files: tuple[str, ...] = ()
 
     def locate(self, path: str, offset: int) -> int:
         """1-based line of ``offset`` within ``path``'s original text."""
@@ -49,13 +55,24 @@ def _mask(text: str) -> str:
     Length and newline positions are preserved: masked characters become a single space, and
     every ``"\\n"`` is copied through unchanged. A ``%`` starts a comment only when preceded by
     an even number of backslashes (``\\%`` is a literal percent, ``\\\\%`` is a line break then a
-    comment). The ``\\begin{...}``/``\\end{...}`` lines of a masked verbatim-like environment are
-    copied through unmasked; only the body between them is blanked.
+    comment). The ``\\begin{...}``/``\\end{...}`` tokens of a masked verbatim-like environment are
+    copied through unmasked (the float/environment rules depend on seeing them); only the body
+    between them is blanked.
+
+    A ``%`` on the same physical line as one of those tokens DOES start a comment, exactly as it
+    does in ordinary text -- ``\\begin{lstlisting} % \\linespread{0.5}`` is a comment, not source.
+    Copying those two lines through verbatim was this module's one masking hole: nothing was
+    looking *for* comments, so every rule that scans the line saw the comment's contents intact
+    and ``format.compressed_leading`` / ``crossref.undefined_ref`` fired `critical` on it. The
+    comment state therefore carries a resume target (``after_comment``): a comment opened on a
+    ``\\begin`` line resumes in the verbatim ``body`` at the newline, one opened on an ``\\end``
+    line resumes in ordinary ``text``.
     """
     out: list[str] = []
     i = 0
     n = len(text)
     state = "text"  # text | comment | begin_line | body | end_line
+    after_comment = "text"  # state the `comment` state returns to at the end of the line
     env = ""
     backslashes = 0
     while i < n:
@@ -69,6 +86,7 @@ def _mask(text: str) -> str:
             if c == "%":
                 if backslashes % 2 == 0:
                     out.append(" ")
+                    after_comment = "text"
                     state = "comment"
                 else:
                     out.append(c)
@@ -95,35 +113,56 @@ def _mask(text: str) -> str:
         if state == "comment":
             if c == "\n":
                 out.append(c)
-                state = "text"
+                state = after_comment
+                backslashes = 0
             else:
                 out.append(" ")
             i += 1
             continue
-        if state == "begin_line":
-            out.append(c)
-            if c == "\n":
-                state = "body"
-            i += 1
-            continue
-        if state == "body":
+        if state in ("begin_line", "end_line"):
+            # The remainder of the physical line carrying a \begin{verbatim}/\end{verbatim}
+            # token: ordinary LaTeX as far as comments go, so the same even-backslash rule as the
+            # `text` state applies. `resume` is where the line ends up -- inside the environment's
+            # body after a \begin line, back in ordinary text after an \end line.
+            resume = "body" if state == "begin_line" else "text"
             if c == "\n":
                 out.append(c)
+                state = resume
+                backslashes = 0
                 i += 1
                 continue
-            match = _END_ENV_RE.match(text, i)
-            if match and match.group(1) == env:
-                out.append(text[i : match.end()])
-                i = match.end()
-                state = "end_line"
+            if c == "%":
+                if backslashes % 2 == 0:
+                    out.append(" ")
+                    after_comment = resume
+                    state = "comment"
+                else:
+                    out.append(c)
+                backslashes = 0
+                i += 1
                 continue
-            out.append(" ")
+            if c == "\\":
+                out.append(c)
+                backslashes += 1
+                i += 1
+                continue
+            out.append(c)
+            backslashes = 0
             i += 1
             continue
-        # state == "end_line"
-        out.append(c)
+        # state == "body" -- every character is blanked until the matching \end{<env>}.
         if c == "\n":
-            state = "text"
+            out.append(c)
+            i += 1
+            continue
+        match = _END_ENV_RE.match(text, i)
+        if match and match.group(1) == env:
+            out.append(text[i : match.end()])
+            i = match.end()
+            state = "end_line"
+            backslashes = 0
+            continue
+        out.append(" ")
         i += 1
     return "".join(out)
 
@@ -133,6 +172,13 @@ def _with_tex_extension(target: str) -> str:
     if "." in last_segment:
         return target
     return f"{target}.tex"
+
+
+def _is_tex_path(path: str) -> bool:
+    """``True`` for a payload path that holds LaTeX source (see ``_TEX_EXTENSIONS``)."""
+    last_segment = path.rsplit("/", 1)[-1]
+    dot = last_segment.rfind(".")
+    return dot != -1 and last_segment[dot:].lower() in _TEX_EXTENSIONS
 
 
 def _include_targets(masked: str) -> Iterator[str]:
@@ -149,6 +195,26 @@ def build_source(main_file: str, files: Mapping[str, str]) -> PreflightSource:
     a target already on it is a true cycle, whose back-edge is recorded in ``unresolved_includes``
     instead of being followed, so a cyclic include graph still returns. A target absent from
     ``files`` altogether is also recorded there.
+
+    ``unexamined_files`` is the mirror image of that, and the reason it exists is the whole point:
+    a ``.tex``/``.latex`` file the payload DID supply but the include graph never reached is
+    content nobody read. ``_INPUT_RE`` only knows ``\\input`` and ``\\include``, so a project
+    wired up with ``\\subfile``, ``\\import``, ``\\subimport``, ``\\InputIfFileExists``,
+    ``\\includeonly``, a conditional include or a macro-wrapped one leaves its sections unread —
+    and before this field existed every bookkeeping field stayed empty, so the runner happily
+    reported ``crossref.undefined_ref`` as `critical` over labels sitting in a file it never
+    opened. Recording the paths here instead of growing the command list is deliberate (final
+    whole-branch review, ruling 30): the list of commands that can pull in a file is open-ended,
+    the set of files nobody read is not. The runner treats a non-empty ``unexamined_files`` exactly
+    as it treats a missing ``\\input`` target — suppress the cross-file rules — because spec §4.3's
+    policy is "thà im lặng còn hơn bắn critical dựa trên dữ liệu thiếu". It is reported as its own
+    field, not folded into ``unresolved_includes``, because the panel must not tell an author a
+    file is missing when the file is right there.
+
+    Consequence, accepted: a genuinely unused stray ``.tex`` in the payload also suppresses
+    ``crossref.undefined_ref`` and ``bib.uncited_entry``. That is the spec's stated preference —
+    silence over a false critical — and the panel names the file, so the author can see exactly
+    which one caused it.
     """
     resolved: list[SourceFile] = []
     visited: set[str] = set()
@@ -174,4 +240,11 @@ def build_source(main_file: str, files: Mapping[str, str]) -> PreflightSource:
         ancestors.pop()
 
     resolve(main_file)
-    return PreflightSource(main_file=main_file, files=tuple(resolved), unresolved_includes=tuple(unresolved))
+    read = {source_file.path for source_file in resolved}
+    unexamined = tuple(path for path in files if path not in read and _is_tex_path(path))
+    return PreflightSource(
+        main_file=main_file,
+        files=tuple(resolved),
+        unresolved_includes=tuple(unresolved),
+        unexamined_files=unexamined,
+    )

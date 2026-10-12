@@ -28,9 +28,17 @@ _LABEL_RE = re.compile(r"\\label\{([^}]*)\}")
 _FLOAT_RE = re.compile(r"\\begin\{(figure\*|table\*|figure|table|algorithm)\}(.*?)\\end\{\1\}", re.DOTALL)
 
 
-def _is_macro_parameter(key: str) -> bool:
-    """A key such as ``#1`` is a \\newcommand parameter, not a real label/reference."""
-    return "#" in key
+def _is_unresolvable_key(key: str) -> bool:
+    """``True`` for a key this static analysis can never match against a literal ``\\label``.
+
+    Two shapes qualify. ``#1`` is a ``\\newcommand`` parameter, not a real key. A key containing a
+    backslash (``\\ref{\\figlabel}``, ``\\ref{fig:a\\arabic{n}}``) is a macro expansion whose value
+    is only known to TeX at compile time -- it can never equal a literal label string, so reporting
+    it as undefined would be a `critical` on a document that is very likely correct. Skipping it
+    also keeps it out of ``labels_by_key``, so an unresolvable ``\\label`` is not reported as
+    duplicate or unused either.
+    """
+    return "#" in key or "\\" in key
 
 
 def check_crossref(src: PreflightSource) -> list[Finding]:
@@ -42,13 +50,13 @@ def check_crossref(src: PreflightSource) -> list[Finding]:
     for path, masked in src.iter_masked():
         for match in _LABEL_RE.finditer(masked):
             key = match.group(1).strip()
-            if not key or _is_macro_parameter(key):
+            if not key or _is_unresolvable_key(key):
                 continue
             labels_by_key.setdefault(key, []).append((path, match.start()))
         for match in _REF_RE.finditer(masked):
             for raw_key in match.group(1).split(","):
                 key = raw_key.strip()
-                if not key or _is_macro_parameter(key):
+                if not key or _is_unresolvable_key(key):
                     continue
                 refs.append((key, path, match.start()))
 

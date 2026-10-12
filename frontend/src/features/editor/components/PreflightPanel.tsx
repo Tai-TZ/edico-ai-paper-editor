@@ -13,6 +13,8 @@ import { assessManuscriptMaturity } from "@/lib/paper-score";
 import { preflightCopy, type RequiredStatementId } from "@/lib/preflight-i18n";
 import {
   PREFLIGHT_WORD_LIMIT_MAX,
+  preflightCrossFileCauseFiles,
+  preflightCrossFileCauses,
   preflightSuppressionReason,
   sanitizeWordLimitInput,
 } from "@/lib/preflight-panel";
@@ -305,18 +307,31 @@ export function PreflightPanel({
                 </h3>
                 <ul className="flex flex-col gap-1.5">
                   {report.suppressed.map((rule) => {
-                    const reason = preflightSuppressionReason(rule);
-                    const includes = report.unresolved_includes;
+                    // The rule id gives the family; only the report's own two file lists say
+                    // which cross-file cause actually applied, and both can apply at once.
+                    const family = preflightSuppressionReason(rule);
+                    const causes =
+                      family === "double_blind_conflict"
+                        ? (["double_blind_conflict"] as const)
+                        : preflightCrossFileCauses(report);
                     return (
                       <li
                         key={rule}
                         className="rounded-md border border-dashed border-border/60 px-3 py-2 text-[11px] text-muted-foreground"
                       >
                         <span className="font-medium text-foreground">{ruleTitleFor(t, rule)}</span>{" "}
-                        — {t.suppressedReason[reason]}
-                        {reason === "unresolved_includes" && includes.length
-                          ? ` (${includes.join(", ")})`
-                          : ""}
+                        {causes.map((cause) => {
+                          const files =
+                            cause === "double_blind_conflict"
+                              ? []
+                              : preflightCrossFileCauseFiles(cause, report);
+                          return (
+                            <span key={cause}>
+                              — {t.suppressedReason[cause]}
+                              {files.length ? ` (${files.join(", ")})` : ""}{" "}
+                            </span>
+                          );
+                        })}
                       </li>
                     );
                   })}

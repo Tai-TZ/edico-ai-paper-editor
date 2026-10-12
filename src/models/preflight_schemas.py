@@ -56,6 +56,13 @@ class PreflightReport(BaseModel):
     # \input targets absent from the request payload (surfaced so the panel can explain why a
     # rule group's findings may be incomplete — see source.py's build_source).
     unresolved_includes: list[str] = Field(default_factory=list)
+    # .tex/.latex files the payload DID supply that the \input/\include graph never reached, so
+    # nothing read them (a \subfile / \import / \InputIfFileExists / \includeonly project, a
+    # conditional include, a macro-wrapped one, or simply a stray unused file). Suppresses the same
+    # cross-file rules as `unresolved_includes` for the same reason, but is a SEPARATE field on
+    # purpose: "this file is missing" and "this file was never opened" are different sentences, and
+    # the panel must not render the first one about a file the author can see in their own project.
+    unexamined_files: list[str] = Field(default_factory=list)
     # True when there was nothing to analyse at all (no files, or every resolved file is blank/
     # comment-only once masked) -- see runner.py's "no-content path". Deliberately a separate
     # field from `skipped`: `skipped` already means "not declared" (anon/length), and overloading

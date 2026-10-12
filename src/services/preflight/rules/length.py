@@ -24,8 +24,10 @@ Not counted:
 - Everything in the preamble — ``\\documentclass`` through ``\\begin{document}``. The **body** is
   everything between ``\\begin{document}`` and ``\\end{document}``; a file with neither (an
   ``\\input``-ed fragment, which never carries its own document environment) is entirely body.
-- Math: inline ``$...$``, display ``$$...$$``, ``\\(...\\)``, ``\\[...\\]``, and the
-  ``equation``/``equation*``/``align``/``align*``/``gather``/``multline`` environments. Stripped
+- Math: inline ``$...$``, display ``$$...$$``, ``\\(...\\)``, ``\\[...\\]``, and every display-math
+  *environment* in ``_MATH_ENV_RE`` (``equation``, ``eqnarray``, ``align``, ``alignat``,
+  ``flalign``, ``gather``, ``multline``, ``IEEEeqnarray``, each with its starred form, plus
+  ``subequations``, ``displaymath`` and ``math``). Stripped
   by regex *before* the text ever reaches pylatexenc, because pylatexenc's ``math_mode="text"``
   renders math as readable prose rather than dropping it — exactly the opposite of what this rule
   needs.
@@ -72,10 +74,26 @@ _END_DOCUMENT_RE = re.compile(r"\\end\{document\}")
 # too, not just the command.
 _BIBLIOGRAPHY_TAIL_RE = re.compile(r"\\bibliography\{[^}]*\}" r"|\\printbibliography\b" r"|\\begin\{thebibliography\}")
 
-# \begin{equation|equation*|align|align*|gather|multline}...\end{<same name>} -- the \1
-# backreference requires the closing environment name to match the opener exactly (including the
-# star), so a malformed/mismatched pair is simply left unmatched rather than guessed at.
-_MATH_ENV_RE = re.compile(r"\\begin\{(equation\*?|align\*?|gather|multline)\}.*?\\end\{\1\}", re.DOTALL)
+# \begin{<display-math env>}...\end{<same name>} -- the \1 backreference requires the closing
+# environment name to match the opener exactly (including the star), so a malformed/mismatched
+# pair is simply left unmatched rather than guessed at.
+#
+# The list is long on purpose. It originally held only equation/align/gather/multline, which left
+# `eqnarray` -- the dominant display-math environment in IEEE-template papers, and this product
+# ships IEEEtran -- counted as prose: one 216-character display equation measured as 18 words,
+# and 320 real prose words plus one eqnarray plus three tables measured 428 against a 400-word
+# limit. Starred variants are spelled out rather than assumed, because `gather*` and `multline*`
+# were missing from the original alternation even though their unstarred forms were present.
+# `alignat`/`flalign` are amsmath's remaining display forms, `IEEEeqnarray` is IEEEtran's own,
+# `subequations` wraps a group of them, and `displaymath`/`math` are LaTeX's own primitive
+# environment forms of \[...\] and $...$.
+_MATH_ENV_RE = re.compile(
+    r"\\begin\{("
+    r"equation\*?|eqnarray\*?|align\*?|alignat\*?|flalign\*?|gather\*?|multline\*?"
+    r"|IEEEeqnarray\*?|subequations|displaymath|math"
+    r")\}.*?\\end\{\1\}",
+    re.DOTALL,
+)
 # Display math $$...$$ -- matched, and stripped, before the single-dollar pattern below so a
 # "$$...$$" pair is consumed as one span instead of being misread as two empty "$...$" runs.
 _DISPLAY_DOLLAR_MATH_RE = re.compile(r"\$\$.*?\$\$", re.DOTALL)

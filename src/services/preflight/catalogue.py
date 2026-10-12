@@ -61,8 +61,15 @@ PREFLIGHT_RULE_IDS: tuple[str, ...] = (
 
 # rule id -> "critical" | "warning" | "info". `critical` is reserved for rules that are certain
 # to be wrong and certain to have consequences (see spec 3, intro); every heuristic rule is
-# `warning` or `info`. This set of 8 critical rules is pinned by
+# `warning` or `info`. This set of 7 critical rules is pinned by
 # tests/test_preflight/test_catalogue.py::test_only_the_spec_s_rules_are_critical.
+#
+# `length.over_limit` is `warning`, not the `critical` spec 3.6's table first listed: the word
+# count is an approximation of what a venue will measure (3.6's own prose calls it "xap xi, chi
+# dung de canh bao som"), and spec 3's governing principle is that a heuristic cannot be
+# `critical`. A critical row that renders "this count is only an estimate" underneath it is
+# self-contradicting copy. The spec table was corrected to match (final whole-branch review,
+# ruling 29).
 RULE_SEVERITY: Mapping[str, str] = {
     "crossref.undefined_ref": "critical",
     "crossref.float_without_label": "warning",
@@ -91,7 +98,7 @@ RULE_SEVERITY: Mapping[str, str] = {
     "anon.funding_identifiers": "warning",
     "anon.self_reference": "info",
     "anon.repository_link": "info",
-    "length.over_limit": "critical",
+    "length.over_limit": "warning",
     "length.near_limit": "info",
 }
 

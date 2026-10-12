@@ -32,8 +32,11 @@ def test_only_the_spec_s_rules_are_critical():
         "anon.author_populated",
         "anon.affiliation_populated",
         "anon.email_present",
-        "length.over_limit",
     }
+    # length.over_limit is deliberately NOT here: the word count is an estimate (spec 3.6's own
+    # prose), and spec 3's governing principle bars a heuristic from `critical`. Demoted in the
+    # final whole-branch review, ruling 29.
+    assert RULE_SEVERITY["length.over_limit"] == "warning"
 
 
 def test_profile_defaults_match_the_spec():

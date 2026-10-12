@@ -8,9 +8,10 @@ import {
 } from "@/lib/api/preflight-api";
 import { toUserFacingMessage } from "@/lib/api/api-errors";
 import type { UiLanguage } from "@/lib/locale-store";
-import { isBibFile, type ProjectFile } from "@/lib/project-store";
+import type { ProjectFile } from "@/lib/project-store";
 import {
   canJumpToPreflightFinding,
+  collectPreflightBibContent,
   loadPreflightProfile,
   savePreflightProfile,
 } from "@/lib/preflight-panel";
@@ -86,12 +87,11 @@ export function useEditorPreflight({
     setLoading(true);
     setError(null);
 
-    const bibFile = projectFiles.find((f) => isBibFile(f.path));
-
     runPreflightRequest({
       mainFile,
       files: projectFiles,
-      bibContent: bibFile?.content ?? "",
+      // Every `.bib`, not the first one: see `collectPreflightBibContent`.
+      bibContent: collectPreflightBibContent(projectFiles),
       profile,
       locale,
       signal: abort.signal,

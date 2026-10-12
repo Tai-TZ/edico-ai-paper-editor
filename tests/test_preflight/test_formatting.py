@@ -134,3 +134,10 @@ def test_fontsize_with_no_begin_document_treats_the_whole_file_as_body():
     out = check_formatting(build_source("main.tex", files))
     hit = [f for f in out if f.rule == "format.font_size_override"]
     assert len(hit) == 1 and hit[0].file == "frag.tex"
+
+
+def test_a_linespread_inside_a_comment_on_a_listing_line_is_not_a_finding():
+    # Final whole-branch review, FIX 5: these two lines used to be copied through unmasked, so a
+    # commented-out \linespread on them fired `critical` on a correct document.
+    assert _f("\\begin{lstlisting} % \\linespread{0.5} squeeze\ncode\n\\end{lstlisting}\n") == []
+    assert _f("\\begin{verbatim}\ncode\n\\end{verbatim} % \\linespread{0.5}\n") == []

@@ -474,3 +474,61 @@ def test_thanks_counts_as_funding_context():
     ):
         out = check_anonymity(build_source("main.tex", {"main.tex": text + "\n"}))
         assert "anon.funding_identifiers" in [f.rule for f in out], text
+
+
+# --- final whole-branch review, FIX 1: real venue templates must never fire a false critical ----
+
+# (\author{...} content, where it comes from). Every row is verbatim template content an author is
+# INSTRUCTED to leave untouched when they submit, or a placeholder this product ships itself -- so
+# a finding on any of them is a `critical` on a correct document, which spec §7 names as the
+# failure that destroys trust in the whole panel. The venue name travels into the assertion
+# message so a future regression says which template broke.
+_ANONYMISED_AUTHOR_BLOCKS = (
+    ("Author Name", "this repo's default new paper (frontend/src/lib/project-store.ts)"),
+    ("Tên tác giả", "this repo's VI default (frontend/src/lib/project-store.ts)"),
+    ("Ten tac gia", "this repo's VI default, unaccented spelling"),
+    ("First Author\\inst{1} \\and Second Author\\inst{2}", "this repo's Springer seed (template_builtins.py)"),
+    ("Anonymous Author(s) \\\\ Affiliation \\\\ Address \\\\ \\texttt{email@domain}", "ICLR"),
+    ("Anonymous ACL submission", "ACL/EMNLP"),
+    ("Anonymous CVPR submission\\\\ Paper ID \\cvprPaperID", "CVPR"),
+    ("Anonymous Submission", "AAAI"),
+    ("Author Withheld", "generic withheld"),
+    ("[Redacted for double-blind review]", "generic redacted"),
+    ("Removed for review", "generic removed-for-review"),
+    ("\\anonymousauthors", "a venue's own anonymising macro: markup with no visible text"),
+)
+
+# The other direction: a value that is a real identity must still be critical. A fix that silences
+# a true leak is far worse than the false-positive bug it was written to close.
+_LEAKING_AUTHOR_BLOCKS = (
+    ("Jane Doe", "a bare real name"),
+    ("Jane Doe \\and John Smith", "two real names"),
+    ("Jane Doe\\\\MIT", "a real name and an affiliation on two lines"),
+    ("\\textbf{Jane Doe}", "a real name wrapped in markup"),
+)
+
+
+def test_no_major_venue_s_unmodified_anonymous_template_fires_a_critical():
+    for value, venue in _ANONYMISED_AUTHOR_BLOCKS:
+        doc = f"\\author{{{value}}}\n"
+        assert check_anonymity(build_source("main.tex", {"main.tex": doc})) == [], f"{venue}: {value!r}"
+
+
+def test_the_same_anonymised_values_are_also_clean_in_an_affiliation_command():
+    for value, venue in _ANONYMISED_AUTHOR_BLOCKS:
+        doc = f"\\institute{{{value}}}\n"
+        assert check_anonymity(build_source("main.tex", {"main.tex": doc})) == [], f"{venue}: {value!r}"
+
+
+def test_a_real_identity_still_fires_critical_in_both_commands():
+    for value, shape in _LEAKING_AUTHOR_BLOCKS:
+        author = f"\\author{{{value}}}\n"
+        assert "anon.author_populated" in _a(author), f"author, {shape}: {value!r}"
+        affiliation = f"\\institute{{{value}}}\n"
+        assert "anon.affiliation_populated" in _a(affiliation), f"institute, {shape}: {value!r}"
+
+
+def test_a_real_institution_name_is_not_mistaken_for_an_anonymised_value():
+    for value in ("MIT", "Stanford University", "Đại học Quốc gia Hà Nội", "Hanoi University of Science"):
+        doc = f"\\affiliation{{{value}}}\n"
+        assert "anon.affiliation_populated" in _a(doc), value

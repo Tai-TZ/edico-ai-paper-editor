@@ -3,7 +3,10 @@ import {
   DEFAULT_PREFLIGHT_PROFILE,
   PREFLIGHT_WORD_LIMIT_MAX,
   canJumpToPreflightFinding,
+  collectPreflightBibContent,
   loadPreflightProfile,
+  preflightCrossFileCauseFiles,
+  preflightCrossFileCauses,
   preflightLineCount,
   preflightSuppressionReason,
   sanitizeWordLimitInput,
@@ -231,5 +234,102 @@ describe("sanitizeWordLimitInput", () => {
 
   it("falls back to null for non-numeric input instead of persisting NaN", () => {
     expect(sanitizeWordLimitInput("abc")).toBeNull();
+  });
+});
+
+// --- final whole-branch review, FIX 2: every .bib, not the first one ---------------------------
+
+describe("collectPreflightBibContent", () => {
+  const files = [
+    { path: "main.tex", content: "\\cite{lee2022} \\cite{kim2023}" },
+    { path: "refs.bib", content: "@article{lee2022, title={A}}" },
+    { path: "extra.bib", content: "@inproceedings{kim2023, title={B}}" },
+  ];
+
+  it("includes every .bib file, not just the first in array order", () => {
+    // The bug this replaces: `projectFiles.find(isBibFile)` kept refs.bib and silently dropped
+    // extra.bib, so every key defined in extra.bib came back as `bib.cite_key_missing` at
+    // `critical` on a correct paper. Measured: 1 false critical with either file alone, 0 with
+    // both.
+    const bib = collectPreflightBibContent(files);
+    expect(bib).toContain("lee2022");
+    expect(bib).toContain("kim2023");
+  });
+
+  it("joins the files with a newline so two entries never fuse into one", () => {
+    const bib = collectPreflightBibContent([
+      { path: "a.bib", content: "@article{a, title={A}}" },
+      { path: "b.bib", content: "@article{b, title={B}}" },
+    ]);
+    expect(bib).toBe("@article{a, title={A}}\n@article{b, title={B}}");
+  });
+
+  it("returns an empty string when the project has no .bib at all", () => {
+    expect(collectPreflightBibContent([{ path: "main.tex", content: "x" }])).toBe("");
+  });
+
+  it("ignores .tex files and is case-insensitive about the extension", () => {
+    const bib = collectPreflightBibContent([
+      { path: "main.tex", content: "tex content" },
+      { path: "REFS.BIB", content: "@article{a, title={A}}" },
+    ]);
+    expect(bib).toBe("@article{a, title={A}}");
+  });
+});
+
+// --- final whole-branch review, FIX 3: which cross-file cause the panel should name -------------
+
+describe("preflightCrossFileCauses", () => {
+  it("names the missing-target cause when only unresolved_includes is populated", () => {
+    expect(
+      preflightCrossFileCauses({
+        unresolved_includes: ["sections/gone.tex"],
+        unexamined_files: [],
+      }),
+    ).toEqual(["unresolved_includes"]);
+  });
+
+  it("names the never-read cause when only unexamined_files is populated", () => {
+    // A \subfile-wired project: the file is right there, so telling the author it "could not be
+    // found" would be a false statement about their own project.
+    expect(
+      preflightCrossFileCauses({
+        unresolved_includes: [],
+        unexamined_files: ["sections/intro.tex"],
+      }),
+    ).toEqual(["unexamined_files"]);
+  });
+
+  it("names both causes when both apply, missing target first", () => {
+    expect(
+      preflightCrossFileCauses({
+        unresolved_includes: ["sections/gone.tex"],
+        unexamined_files: ["sections/intro.tex"],
+      }),
+    ).toEqual(["unresolved_includes", "unexamined_files"]);
+  });
+
+  it("never returns an empty list, so a suppressed row always carries a reason", () => {
+    // runner.py cannot produce this report shape (it only suppresses these rules when one of the
+    // two fields is non-empty), but an empty array here would render a rule name with no reason.
+    expect(preflightCrossFileCauses({ unresolved_includes: [], unexamined_files: [] })).toEqual([
+      "unresolved_includes",
+    ]);
+  });
+});
+
+describe("preflightCrossFileCauseFiles", () => {
+  const report = {
+    unresolved_includes: ["sections/gone.tex"],
+    unexamined_files: ["sections/intro.tex"],
+  };
+
+  it("hands each cause its own file list, never the other one's", () => {
+    expect(preflightCrossFileCauseFiles("unresolved_includes", report)).toEqual([
+      "sections/gone.tex",
+    ]);
+    expect(preflightCrossFileCauseFiles("unexamined_files", report)).toEqual([
+      "sections/intro.tex",
+    ]);
   });
 });
