@@ -209,6 +209,74 @@ def test_empty_braces_on_a_raw_only_field_still_counts_as_missing():
     assert ("bib.missing_required_field", "publisher") in [(f.rule, f.symbol) for f in out]
 
 
+# --- raw-only field presence must be anchored to an actual field boundary ----------------------
+# Fix round 2: the old `_RAW_ONLY_FIELD_RE` matched a field's NAME anywhere in the raw text
+# followed by "=", including inside an unrelated field's own braced value. These pin the
+# replacement (`_raw_top_level_fields`, a brace-depth-aware scan) against that exact defect
+# class, in both directions: a word that merely looks like a field name must not count as one
+# (false negative on the finding), and a comma inside a braced value must not be mistaken for a
+# field separator either.
+
+
+def test_field_name_inside_another_value_is_not_presence():
+    # "school" appears inside title's own braces, immediately followed by "=" -- the old regex
+    # matched that and treated "school" as present even though the entry has no school field.
+    bib = "@phdthesis{t, title={On school = society}, year={2020}}"
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{t}\n"}), bib)
+    assert ("bib.missing_required_field", "school") in [(f.rule, f.symbol) for f in out]
+
+
+def test_comma_inside_a_braced_value_does_not_create_a_field_boundary():
+    # The comma inside title's braces must not be read as separating "school = b" into its own
+    # top-level field.
+    bib = "@phdthesis{t, title={a, school = b}, year={2020}}"
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{t}\n"}), bib)
+    assert ("bib.missing_required_field", "school") in [(f.rule, f.symbol) for f in out]
+
+
+def test_real_top_level_field_after_a_braced_value_is_found():
+    # A genuine school="S" field, reached only after a braced value (and the depth-0 comma that
+    # follows it), must still be found.
+    bib = "@phdthesis{t, title={a, b}, school={S}, year={2020}}"
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{t}\n"}), bib)
+    assert "bib.missing_required_field" not in [f.rule for f in out]
+
+
+def test_field_at_the_very_start_of_raw_is_found():
+    bib = "@book{b, publisher={P}, title={T}, year={2020}}"
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{b}\n"}), bib)
+    assert "bib.missing_required_field" not in [f.rule for f in out]
+
+
+def test_unbalanced_braces_do_not_hide_a_present_field():
+    # This entry's title value opens a brace it never closes, so bibtexparser itself rejects the
+    # whole block ("Unexpectedly reached end of file") rather than handing us a parsed entry --
+    # verified by hand: parse_bib_entries("@book{b, title={unclosed {brace, ...") returns {}.
+    # With no usable entries at all, check_bibliography takes the pre-existing "no bibliography
+    # supplied" early exit (see the module docstring and test_no_bib_content_reports_nothing_
+    # rather_than_everything above) before our brace-depth scan ever runs. So for *this specific*
+    # flavor of malformed BibTeX, "a present field must not look absent" holds trivially: no
+    # field of any entry is reported as either present or missing, because there is no entry.
+    bib = "@book{b, title={unclosed {brace, publisher={P}, year={2020}}"
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{b}\n"}), bib)
+    assert out == []
+
+
+def test_malformed_quoting_does_not_hide_a_present_field_via_the_fallback():
+    # Unlike the test above, THIS malformed entry does parse: bibtexparser's own tokenizer
+    # handles the stray "{" inside the quoted title value just fine (title, publisher, and year
+    # all come back correctly in the parsed dict -- verified by hand). But that stray "{" is
+    # invisible to our depth-unaware scan as a quote, so it reads as a real, never-closed open
+    # brace: `_raw_top_level_fields` swallows "publisher={P}, year={2020}" into what it thinks is
+    # still title's value, finds no top-level "publisher", and reports `balanced=False`. That
+    # flag is exactly what sends `_field_is_present` to the unanchored fallback regex, which does
+    # find "publisher={P}" in the raw text and correctly calls it present. This is the "fallback"
+    # branch that test_unbalanced_braces_do_not_hide_a_present_field never reaches.
+    bib = '@book{b, title="open { brace", publisher={P}, year={2020}}'
+    out = check_bibliography(build_source("main.tex", {"main.tex": "\\cite{b}\n"}), bib)
+    assert ("bib.missing_required_field", "publisher") not in [(f.rule, f.symbol) for f in out]
+
+
 # --- collect_cite_keys ------------------------------------------------------------------------
 
 

@@ -38,16 +38,29 @@ _REQUIRED_FIELDS_BY_TYPE: dict[str, tuple[str, ...]] = {
 
 # Fields required above that parse_bib_entries' dict never carries (it only returns key, type,
 # title, author, year, doi, eprint, journal, raw — see src/services/parser/latex.py). Checked
-# instead by a presence-only scan of the entry's raw text: a braced value (one level of nested
-# braces allowed, e.g. publisher={A {B} C}), a double-quoted value, or a bare token, matched
-# case-insensitively since BibTeX field names are. This is deliberately not a real BibTeX parse —
-# it only needs to answer "is this field present and non-empty".
-_RAW_ONLY_FIELD_RE: dict[str, re.Pattern[str]] = {
+# instead by a brace-depth-aware scan of the entry's raw text for a field that begins at the
+# entry's own top level — never inside the value of some other field, which is the only place a
+# real BibTeX field can start. See `_raw_top_level_fields` for the scan and `_field_is_present`
+# for how its result is used, including the fallback for an entry whose braces don't balance.
+_RAW_ONLY_FIELDS = frozenset({"publisher", "booktitle", "school"})
+
+# "name = value" for one top-level, comma-delimited segment of an entry's raw text (see
+# `_raw_top_level_fields`); the caller lowercases the captured name since BibTeX field names are
+# case-insensitive.
+_TOP_LEVEL_FIELD_RE = re.compile(r"^\s*([A-Za-z][\w-]*)\s*=\s*(.*)$", re.DOTALL)
+
+# Last-resort presence scan for a raw-only field, used only when `_raw_top_level_fields` reports
+# the entry's braces as unbalanced and so cannot be trusted to have found every top-level field.
+# Unanchored on purpose — matching the field's name anywhere ahead of "=" risks a false "present"
+# (the exact bug this module had to fix for well-formed entries), but on malformed input a missed
+# "present" (a false "missing" finding) is the worse failure, per the project's rule that a false
+# positive is more damaging than a false negative.
+_RAW_ONLY_FIELD_FALLBACK_RE: dict[str, re.Pattern[str]] = {
     field: re.compile(
         r"\b" + field + r"\s*=\s*(\{(?:[^{}]|\{[^{}]*\})*\}|\"[^\"]*\"|[^,}\s][^,}]*)",
         re.IGNORECASE,
     )
-    for field in ("publisher", "booktitle", "school")
+    for field in _RAW_ONLY_FIELDS
 }
 
 
@@ -64,16 +77,65 @@ def _strip_braces_or_quotes(value: str) -> str:
     return value
 
 
+def _raw_top_level_fields(raw: str) -> tuple[dict[str, str], bool]:
+    """Fields that start at brace depth 0 in an entry's raw text, plus whether braces balanced.
+
+    ``raw`` (from ``parse_bib_entries``) is the entry body after ``key,`` *including* the
+    entry's own closing delimiter, so a well-formed entry's text is exactly one closing
+    brace/paren short of balanced; that trailing delimiter is dropped before depth is tracked.
+    A field only begins at depth 0 — inside any ``{...}`` nesting it is just text, however much
+    it looks like ``name =`` (so ``title={On school = society}`` never gives "school" a
+    top-level entry, and ``title={a, school = b}`` never lets that inner comma split a field).
+    Top-level (depth-0) commas are what separate one field from the next.
+
+    This does not track quotes, so a stray unmatched brace inside a quoted value can throw the
+    depth count off for the rest of the entry — callers must not treat an "absent" result as
+    trustworthy when the returned ``balanced`` flag is ``False``.
+    """
+    body = raw[:-1] if raw.endswith(("}", ")")) else raw
+    fields: dict[str, str] = {}
+    depth = 0
+    balanced = True
+    start = 0
+    for i, ch in enumerate(body):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth < 0:
+                balanced = False
+                depth = 0
+        elif ch == "," and depth == 0:
+            _record_top_level_field(body[start:i], fields)
+            start = i + 1
+    _record_top_level_field(body[start:], fields)
+    return fields, balanced and depth == 0
+
+
+def _record_top_level_field(segment: str, fields: dict[str, str]) -> None:
+    match = _TOP_LEVEL_FIELD_RE.match(segment)
+    if match:
+        fields[match.group(1).lower()] = match.group(2)
+
+
 def _field_is_present(entry: dict, field: str) -> bool:
     """Non-empty value for ``field`` on a parsed bib entry.
 
     Prefers the parsed dict (title, author, year, doi, eprint, journal — the fields
-    parse_bib_entries actually exposes) and falls back to a raw-text presence check for the
-    required fields it does not (publisher, booktitle, school).
+    parse_bib_entries actually exposes). For the three it does not (publisher, booktitle,
+    school), looks the field up among the entry's top-level fields first; only when the raw
+    text's braces don't balance — so that lookup can't be trusted to be complete — does it fall
+    back to the unanchored presence regex.
     """
-    if field in _RAW_ONLY_FIELD_RE:
-        match = _RAW_ONLY_FIELD_RE[field].search(entry.get("raw", ""))
-        return bool(match and _strip_braces_or_quotes(match.group(1)))
+    if field in _RAW_ONLY_FIELDS:
+        raw = entry.get("raw", "")
+        top_level, balanced = _raw_top_level_fields(raw)
+        if field in top_level:
+            return bool(_strip_braces_or_quotes(top_level[field]))
+        if not balanced:
+            match = _RAW_ONLY_FIELD_FALLBACK_RE[field].search(raw)
+            return bool(match and _strip_braces_or_quotes(match.group(1)))
+        return False
     return bool(entry.get(field, "").strip())
 
 
