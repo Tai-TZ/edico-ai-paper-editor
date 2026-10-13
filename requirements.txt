@@ -7,7 +7,7 @@ pydantic>=2.13.5
 pydantic-settings>=2.7.0
 python-dotenv>=1.2.4
 pyyaml>=6.0.0
-httpx>=0.28.0
+httpx>=0.28.1
 inngest>=0.5.0
 # JSON log lines for Cloud Logging (src/logging_config.py): the standard stdlib-logging JSON formatter,
 # instead of a hand-written one. >=3.1 for the `pythonjsonlogger.json` module path.
