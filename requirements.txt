@@ -37,7 +37,7 @@ cryptography>=44.0.1
 # Parsing (MIT): BibTeX, LaTeX → text, JSON in LLM replies, fuzzy citation-title matching
 bibtexparser>=2.1,<3
 pylatexenc>=2.11,<3
-json-repair>=0.63.5,<1
+json-repair>=0.64.0,<1
 rapidfuzz>=3.14,<4
 
 # Document import (Word / PDF → LaTeX) — both MIT licensed (do not use AGPL PyMuPDF)
