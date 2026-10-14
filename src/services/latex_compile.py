@@ -1409,11 +1409,29 @@ def _parse_synctex_cli_output(stdout: str) -> dict[str, str | int] | None:
     }
 
 
+# Strip a LaTeX command down to its argument, for word-level SyncTeX matching.
+#
+# Both quantifiers are BOUNDED on purpose. Unbounded `[^}]*` made this quadratic: on a line with
+# no closing brace it scanned to the end, failed, and was retried from the next position, once per
+# starting offset. Reached from the unauthenticated POST /compile/synctex — whose `latex` field
+# accepts 2 MB, and whose lines are only split on newlines, so one line can be the whole payload —
+# and called once per candidate phrase inside _resolve_line_by_context's double loop. Measured on
+# the real call path: 8 KB of "\*{{|" took 469 ms, and the growth is clean quadratic, which puts
+# the 2 MB limit in the hours.
+#
+# 64 is far longer than any real command name; 256 is far longer than any argument worth matching
+# a SyncTeX word against. A longer run simply is not normalised, which only costs a word match.
+_COMMAND_WITH_ARG_RE = re.compile(r"\\[a-zA-Z*]{1,64}\{([^}]{0,256})\}")
+_COMMAND_TOKEN_RE = re.compile(r"\\[a-zA-Z*]{1,64}")
+_BRACE_RE = re.compile(r"[{}]")
+_WHITESPACE_RUN_RE = re.compile(r"\s+")
+
+
 def _normalize_match_text(text: str) -> str:
-    cleaned = re.sub(r"\\[a-zA-Z*]+\{([^}]*)\}", r"\1", text)
-    cleaned = re.sub(r"\\[a-zA-Z*]+", " ", cleaned)
-    cleaned = re.sub(r"[{}]", " ", cleaned)
-    return re.sub(r"\s+", " ", cleaned.lower()).strip()
+    cleaned = _COMMAND_WITH_ARG_RE.sub(r"\1", text)
+    cleaned = _COMMAND_TOKEN_RE.sub(" ", cleaned)
+    cleaned = _BRACE_RE.sub(" ", cleaned)
+    return _WHITESPACE_RUN_RE.sub(" ", cleaned.lower()).strip()
 
 
 def _resolve_line_by_context(

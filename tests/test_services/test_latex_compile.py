@@ -603,3 +603,32 @@ def test_cached_workspace_lookup_is_scoped_to_the_owner():
     alice_dir, _ = lc._acquire_workspace("proj-synctex", [], assets_key="k", owner_key="user:alice")
     assert lc._get_cached_compile_workspace("proj-synctex", owner_key="user:bob") is None
     assert lc._get_cached_compile_workspace("proj-synctex", owner_key="user:alice") == alice_dir
+
+
+def test_normalize_match_text_is_linear_on_a_brace_heavy_line():
+    """A hostile single line must not take superlinear time.
+
+    `_normalize_match_text` is reached from the UNAUTHENTICATED POST /compile/synctex, whose
+    `latex` field accepts 2 MB and is only split on newlines — so one line can be the whole
+    payload — and it is called once per candidate phrase inside `_resolve_line_by_context`'s
+    double loop. With an unbounded `[^}]*` the regex scanned to end-of-line, failed for want of a
+    closing brace, and was retried from every starting offset: measured 469 ms at 8 KB, clean
+    quadratic, which puts the 2 MB field limit in the hours of CPU for a single request.
+
+    Asserted as a ratio rather than an absolute time, so a slow CI machine cannot fail it: a
+    quadratic implementation gives ~4x per doubling, a linear one ~2x.
+    """
+    import time
+
+    def elapsed(repetitions: int) -> float:
+        line = "\\*{{|" * repetitions
+        start = time.perf_counter()
+        lc._normalize_match_text(line)
+        return time.perf_counter() - start
+
+    elapsed(2000)  # warm up, so the first call's import/compile cost is not in the measurement
+    small = elapsed(4000)
+    large = elapsed(16000)
+    # 4x the input. Linear predicts ~4x the time; the old quadratic predicted ~16x. 8x leaves
+    # generous headroom for timer noise while still failing a quadratic regression.
+    assert large < small * 8, f"{small=} {large=} — growth looks superlinear"
