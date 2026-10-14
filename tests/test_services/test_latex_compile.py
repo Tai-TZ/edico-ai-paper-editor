@@ -192,9 +192,50 @@ def test_assets_fingerprint_changes_with_asset_content():
 
 def test_workspace_cache_key_scopes_by_project():
     assets_key = "abc123"
-    assert lc._workspace_cache_key("proj-1", assets_key) == "proj:proj-1"
-    assert lc._workspace_cache_key("proj-2", assets_key) == "proj:proj-2"
-    assert lc._workspace_cache_key(None, assets_key) == f"ephemeral:{assets_key}"
+    owner = "user:alice"
+    assert lc._workspace_cache_key("proj-1", assets_key, owner) != lc._workspace_cache_key("proj-2", assets_key, owner)
+    assert lc._workspace_cache_key("proj-1", assets_key, owner) == lc._workspace_cache_key("proj-1", assets_key, owner)
+
+
+# The property the test above never checked: scoping by project is not the same as isolating
+# between callers. `cache_id` is client-supplied and /compile has no auth dependency at all, so
+# before the owner component existed, two unrelated callers sending the same cache_id were handed
+# the same directory on disk -- and the frontend passes the SHARE TOKEN as cache_id on the
+# anonymous share-viewer page (frontend/src/routes/share.$token.tsx), making it reachable by
+# anyone holding a link, including a revoked one.
+def test_two_callers_sending_the_same_cache_id_do_not_share_a_workspace_key():
+    assets_key = "abc123"
+    alice = lc._workspace_cache_key("same-project-id", assets_key, "user:alice")
+    bob = lc._workspace_cache_key("same-project-id", assets_key, "user:bob")
+    assert alice != bob
+
+
+# _assets_fingerprint([]) is sha256(b"") -- a fixed constant -- so every request with no cache_id
+# and no assets (the normal not-yet-saved-project path) collapsed onto ONE global directory. This
+# needed no attacker and no guessed value: it was the default.
+def test_two_callers_with_no_cache_id_and_no_assets_do_not_share_a_workspace_key():
+    empty = lc._assets_fingerprint([])
+    alice = lc._workspace_cache_key(None, empty, "user:alice")
+    bob = lc._workspace_cache_key(None, empty, "user:bob")
+    assert alice != bob
+
+
+def test_the_same_caller_still_reuses_its_own_workspace():
+    # The whole point of the cache: one user recompiling the same project keeps the incremental
+    # workspace. Isolation must not cost that.
+    empty = lc._assets_fingerprint([])
+    assert lc._workspace_cache_key("proj-1", empty, "user:alice") == lc._workspace_cache_key(
+        "proj-1", empty, "user:alice"
+    )
+    assert lc._workspace_cache_key(None, empty, "user:alice") == lc._workspace_cache_key(None, empty, "user:alice")
+
+
+def test_acquire_workspace_hands_different_directories_to_different_callers():
+    alice_dir, _ = lc._acquire_workspace("shared-cache-id", [], assets_key="k", owner_key="user:alice")
+    (alice_dir / "unpublished.tex").write_text("Alice's unpublished manuscript")
+    bob_dir, _ = lc._acquire_workspace("shared-cache-id", [], assets_key="k", owner_key="user:bob")
+    assert bob_dir != alice_dir
+    assert not (bob_dir / "unpublished.tex").exists()
 
 
 def test_compile_minimal_document_when_pdflatex_available():
@@ -268,6 +309,7 @@ def test_asset_resync_when_hash_only_missing():
             "proj-missing",
             [CompileAssetFile(name="fig.png", content_hash="a" * 64)],
             assets_key="deadbeef",
+            owner_key="user:alice",
         )
 
 

@@ -373,11 +373,36 @@ def _assets_fingerprint(assets: list) -> str:
     return digest.hexdigest()
 
 
-def _workspace_cache_key(cache_id: str | None, assets_key: str) -> str:
+def _workspace_cache_key(cache_id: str | None, assets_key: str, owner_key: str) -> str:
+    """Workspace identity: the CALLER plus what they asked to compile.
+
+    ``owner_key`` is derived server-side (``_compile_client_key`` in ``src/api/routes.py``: the
+    authenticated user when the bearer token verifies, else the client IP) and is not optional,
+    because both things it guards against were real:
+
+    - ``cache_id`` is client-supplied and ``POST /compile`` has no auth dependency at all, so
+      keying on it alone handed two unrelated callers the same directory. The frontend passes the
+      SHARE TOKEN as ``cache_id`` on the anonymous share-viewer page
+      (``frontend/src/routes/share.$token.tsx``), and ``/compile`` never consults the share
+      service, so a forwarded or revoked link kept working as a key into that project's workspace.
+    - ``_assets_fingerprint([])`` is ``sha256(b"")``, a constant, so every request with no
+      ``cache_id`` and no assets -- the ordinary not-yet-saved-project path -- collapsed onto one
+      global directory. That one needed no attacker at all.
+
+    The owner goes in both branches rather than replacing the cache id, so a user recompiling
+    their own project still reuses their own incremental workspace. Isolation must not cost that.
+    """
+    owner = _hash_owner_key(owner_key)
     project = (cache_id or "").strip()
     if project:
-        return f"proj:{project}"
-    return f"ephemeral:{assets_key}"
+        return f"owner:{owner}|proj:{project}"
+    return f"owner:{owner}|ephemeral:{assets_key}"
+
+
+def _hash_owner_key(owner_key: str) -> str:
+    """Short digest of the caller identity — it can be an IP, which has no business sitting in a
+    dict key that gets logged or surfaced in a diagnostic."""
+    return hashlib.sha256((owner_key or "anonymous").encode("utf-8")).hexdigest()[:32]
 
 
 def _workspace_content_digest(
@@ -494,8 +519,9 @@ def _acquire_workspace(
     assets: list,
     *,
     assets_key: str,
+    owner_key: str,
 ) -> tuple[Path, bool]:
-    workspace_key = _workspace_cache_key(cache_id, assets_key)
+    workspace_key = _workspace_cache_key(cache_id, assets_key, owner_key)
     resync: list[str] = []
 
     with _workspace_lock:
@@ -1178,16 +1204,23 @@ def _run_compile_attempts(
     return logs
 
 
-def compile_latex(request: CompileRequest) -> CompileResponse:
+def compile_latex(request: CompileRequest, *, owner_key: str = "") -> CompileResponse:
+    """``owner_key`` scopes the compile workspace to the caller — see ``_workspace_cache_key``.
+
+    It defaults to empty only so existing unit tests can call this without inventing an identity;
+    every production caller passes one (``src/api/routes.py`` hands over the same key it already
+    computes for rate limiting). Two callers who both omit it still share, which is why the
+    default must never be used by a route.
+    """
     settings = get_settings()
     _set_compile_budget(time.monotonic() + settings.compile_total_budget_sec)
     try:
-        return _compile_latex_impl(request)
+        return _compile_latex_impl(request, owner_key=owner_key)
     finally:
         _clear_compile_budget()
 
 
-def _compile_latex_impl(request: CompileRequest) -> CompileResponse:
+def _compile_latex_impl(request: CompileRequest, *, owner_key: str = "") -> CompileResponse:
     main_file = request.main_file.strip() or "main.tex"
     compiler = detect_compiler(request.latex, request.compiler)
     engine_path = find_tex_engine(compiler)
@@ -1215,6 +1248,7 @@ def _compile_latex_impl(request: CompileRequest) -> CompileResponse:
         request.cache_id,
         request.assets,
         assets_key=assets_key,
+        owner_key=owner_key,
     )
     allow_package_install = fresh_workspace
     asset_names = {Path(a.name).name for a in request.assets}
