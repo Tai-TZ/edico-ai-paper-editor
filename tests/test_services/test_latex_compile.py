@@ -26,6 +26,17 @@ def _clear_compile_workspaces():
         lc._pdf_cache.clear()
 
 
+def _cached_workspace_for(cache_id: str, owner_key: str = "") -> lc._CachedWorkspace:
+    """The workspace a ``compile_latex(...)`` call stored for ``cache_id``.
+
+    Goes through ``_workspace_cache_key`` instead of spelling the key format out here. The two
+    callers below are TeX-gated, so a hardcoded ``f"proj:{cache_id}"`` rots silently in every
+    environment without pdflatex and surfaces only in the TeX Live workflow — which is exactly
+    what happened when the owner component was added to the key.
+    """
+    return lc._workspaces[lc._workspace_cache_key(cache_id, "", owner_key)]
+
+
 def test_detect_compiler_defaults_to_pdflatex():
     assert lc.detect_compiler(r"\documentclass{article}", "auto") == "pdflatex"
 
@@ -263,7 +274,7 @@ def test_compile_reuses_workspace_with_hash_only_assets():
     )
     assert first.success is True
     asset_hash = lc._file_content_hash(
-        lc._workspaces["proj:proj-delta"].path / "extra.tex",
+        _cached_workspace_for("proj-delta").path / "extra.tex",
     )
     second = lc.compile_latex(
         CompileRequest(
@@ -429,7 +440,7 @@ def test_compile_cannot_input_absolute_path_outside_workspace(tmp_path):
     assert marker not in result.log
     assert marker not in result.error
     # batchmode keeps \typeout out of stdout, so also check TeX's own transcript in the workspace.
-    tex_log = lc._workspaces[f"proj:{cache_id}"].path / "main.log"
+    tex_log = _cached_workspace_for(cache_id).path / "main.log"
     if tex_log.is_file():
         assert marker not in tex_log.read_text(encoding="utf-8", errors="replace")
     assert result.success is False or "openin_any" in result.log
