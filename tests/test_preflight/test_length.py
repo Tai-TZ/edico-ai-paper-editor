@@ -200,3 +200,39 @@ def test_an_eqnarray_paper_under_the_limit_does_not_report_an_overrun():
     )
     assert count_body_words(_src(doc)) == 320
     assert check_length(_src(doc), 400) == []
+
+
+# --- tabular bodies ------------------------------------------------------------------------------
+
+
+# Venues count caption text toward a word limit but not the contents of a table's cells, and a
+# results table of a hundred numeric cells would otherwise add a hundred "words" and make the whole
+# estimate useless. The caption sits outside the tabular, so stripping the tabular body keeps it.
+def _body(body: str) -> int:
+    doc = f"\\begin{{document}}\n{body}\n\\end{{document}}\n"
+    return count_body_words(build_source("main.tex", {"main.tex": doc}))
+
+
+def test_tabular_cells_are_not_counted():
+    assert _body("One two three.\n\\begin{tabular}{ll}\nA & B \\\\ C & D \\\\\n\\end{tabular}") == 3
+
+
+def test_a_table_float_counts_its_caption_but_not_its_cells():
+    body = "\\begin{table}\n\\begin{tabular}{ll}\nAlpha & Beta \\\\\n\\end{tabular}\n\\caption{Two words}\n\\end{table}"
+    assert _body(body) == 2
+
+
+def test_the_tabular_family_variants_are_all_stripped():
+    for env, opening in (
+        ("tabular", "{ll}"),
+        ("tabular*", "{\\textwidth}{ll}"),
+        ("tabularx", "{\\textwidth}{ll}"),
+        ("tabulary", "{\\textwidth}{ll}"),
+        ("longtable", "{ll}"),
+    ):
+        body = f"One two.\n\\begin{{{env}}}{opening}\nX & Y \\\\\n\\end{{{env}}}"
+        assert _body(body) == 2, env
+
+
+def test_prose_on_either_side_of_a_table_does_not_fuse():
+    assert _body("before\\begin{tabular}{l}A\\\\\\end{tabular}after") == 2
