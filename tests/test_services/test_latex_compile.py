@@ -573,3 +573,22 @@ def test_collect_all_tex_sources_ignores_inputs_outside_workspace(tmp_path):
     merged = lc._collect_all_tex_sources(latex, work, "main.tex")
     assert "INSIDE" in merged
     assert "OUTSIDE" not in merged
+
+
+# _get_cached_compile_workspace used to hand-build its own "proj:{id}" key instead of calling
+# _workspace_cache_key. When the owner component was added to the latter, this lookup silently
+# stopped matching any stored workspace — breaking SyncTeX's cached-workspace path without a
+# single test failing, because test_synctex_inverse_uses_cached_workspace early-returns when
+# pdflatex is absent (it is, in CI's unit job; only the TeX Live workflow would have caught it).
+# These two tests need no TeX at all, so they fail everywhere the bug exists.
+def test_cached_workspace_lookup_finds_what_acquire_workspace_stored():
+    owner = "user:alice"
+    acquired, _ = lc._acquire_workspace("proj-synctex", [], assets_key="k", owner_key=owner)
+    found = lc._get_cached_compile_workspace("proj-synctex", owner_key=owner)
+    assert found == acquired
+
+
+def test_cached_workspace_lookup_is_scoped_to_the_owner():
+    alice_dir, _ = lc._acquire_workspace("proj-synctex", [], assets_key="k", owner_key="user:alice")
+    assert lc._get_cached_compile_workspace("proj-synctex", owner_key="user:bob") is None
+    assert lc._get_cached_compile_workspace("proj-synctex", owner_key="user:alice") == alice_dir

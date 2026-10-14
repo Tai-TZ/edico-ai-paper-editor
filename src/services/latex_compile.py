@@ -485,11 +485,17 @@ def _prune_workspaces(now: float | None = None) -> None:
         shutil.rmtree(workspace.path, ignore_errors=True)
 
 
-def _get_cached_compile_workspace(cache_id: str | None) -> Path | None:
+def _get_cached_compile_workspace(cache_id: str | None, *, owner_key: str) -> Path | None:
+    """Look up a workspace the SAME caller stored earlier.
+
+    Goes through ``_workspace_cache_key`` rather than rebuilding the key string here: when the
+    owner component was added, a hand-built ``f"proj:{project}"`` silently stopped matching
+    anything and broke SyncTeX's cached-workspace path with no test failure to show it.
+    """
     project = (cache_id or "").strip()
     if not project:
         return None
-    key = f"proj:{project}"
+    key = _workspace_cache_key(project, "", owner_key)
     with _workspace_lock:
         _prune_workspaces()
         cached = _workspaces.get(key)
@@ -1492,10 +1498,11 @@ def resolve_synctex_line_from_request(
     synctex_line: int,
     word: str = "",
     context: str = "",
+    owner_key: str = "",
 ) -> int:
     source_latex = latex.strip()
     if not source_latex and (cache_id or "").strip():
-        work_dir = _get_cached_compile_workspace(cache_id)
+        work_dir = _get_cached_compile_workspace(cache_id, owner_key=owner_key)
         if work_dir is not None:
             source_latex = _read_workspace_latex(work_dir, Path(jobname).stem or "main")
     return resolve_synctex_line(source_latex, synctex_line, word, context)
@@ -1584,6 +1591,7 @@ def parse_synctex_inverse_disambiguated(
     latex: str = "",
     context: str = "",
     cache_id: str | None = None,
+    owner_key: str = "",
 ) -> dict[str, str | int | float] | None:
     """Inverse SyncTeX with y-scan when the same word appears on multiple lines."""
     synctex = find_synctex()
@@ -1594,7 +1602,7 @@ def parse_synctex_inverse_disambiguated(
     pdf_name = f"{safe_job}.pdf"
     synctex_name = f"{safe_job}.synctex.gz"
 
-    work_dir = _get_cached_compile_workspace(cache_id)
+    work_dir = _get_cached_compile_workspace(cache_id, owner_key=owner_key)
     temp_dir: tempfile.TemporaryDirectory[str] | None = None
     if work_dir is not None:
         if not (work_dir / pdf_name).is_file() or not (work_dir / synctex_name).is_file():
