@@ -5,6 +5,7 @@ import contextlib
 import subprocess
 import uuid
 import zlib
+from functools import partial
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -465,7 +466,7 @@ async def compile_manuscript(request: Request):
         if request.headers.get("content-encoding", "").lower() == "gzip":
             raw = _gunzip_bounded(raw)
         body = CompileRequest.model_validate_json(raw)
-        result = await asyncio.to_thread(compile_latex, body)
+        result = await asyncio.to_thread(partial(compile_latex, body, owner_key=client_key))
         return result
     except HTTPException:
         raise
@@ -522,19 +523,25 @@ def _compile_client_key(request: Request) -> str:
 
 
 @router.post("/compile/synctex", response_model=SyncTeXLookupResponse)
-async def synctex_lookup(body: SyncTeXLookupRequest):
+async def synctex_lookup(body: SyncTeXLookupRequest, request: Request):
+    # Same server-derived identity the compile route uses: a cached workspace belongs to the
+    # caller that created it, so SyncTeX must look it up under that caller, not by cache_id alone.
+    client_key = _compile_client_key(request)
     hit = await asyncio.to_thread(
-        parse_synctex_inverse_disambiguated,
-        body.synctex_base64,
-        body.pdf_base64,
-        body.page,
-        body.x,
-        body.y,
-        body.jobname,
-        body.word,
-        body.latex,
-        body.context,
-        body.cache_id,
+        partial(
+            parse_synctex_inverse_disambiguated,
+            body.synctex_base64,
+            body.pdf_base64,
+            body.page,
+            body.x,
+            body.y,
+            body.jobname,
+            body.word,
+            body.latex,
+            body.context,
+            body.cache_id,
+            owner_key=client_key,
+        )
     )
     if not hit:
         return SyncTeXLookupResponse(found=False, page=body.page)
