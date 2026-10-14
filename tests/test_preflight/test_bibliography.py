@@ -321,3 +321,39 @@ def test_collect_cite_keys_unions_capitalized_and_lowercase_forms():
 def test_collect_cite_keys_ignores_commented_out_cites():
     src = build_source("main.tex", {"main.tex": "% \\cite{a}\n\\cite{b}\n"})
     assert set(collect_cite_keys(src)) == {"b"}
+
+
+# --- macro-valued cite keys ---------------------------------------------------------------------
+
+# The same guard crossref already applies to \ref: a key containing a backslash is a macro whose
+# value only TeX knows, and "#1" is a \newcommand parameter. Neither can ever equal a literal
+# BibTeX key, so reporting them as missing is a `critical` on a document that is very likely fine.
+_UNRESOLVABLE_CITE_DOCS = (
+    ("\\cite{\\mykey}\n", "a bare macro as the key"),
+    ("\\cite{\\keyof{x}}\n", "a macro with an argument"),
+    ("\\newcommand{\\mycite}[1]{\\cite{#1}}\n", "a \\newcommand parameter"),
+    ("\\cite{ok,\\mykey}\n", "one real key and one macro in the same argument"),
+)
+
+
+def test_macro_valued_cite_keys_are_not_reported_missing():
+    for doc, shape in _UNRESOLVABLE_CITE_DOCS:
+        src = build_source("main.tex", {"main.tex": doc})
+        rules = [f.rule for f in check_bibliography(src, _BIB)]
+        assert "bib.cite_key_missing" not in rules, f"{shape}: {doc!r}"
+
+
+def test_a_macro_valued_key_is_not_collected_as_a_citation():
+    src = build_source("main.tex", {"main.tex": "\\cite{\\mykey}\n"})
+    assert set(collect_cite_keys(src)) == set()
+
+
+def test_a_real_key_beside_a_macro_one_still_counts_as_cited():
+    src = build_source("main.tex", {"main.tex": "\\cite{ok,\\mykey}\n"})
+    assert set(collect_cite_keys(src)) == {"ok"}
+    assert "bib.uncited_entry" not in [f.rule for f in check_bibliography(src, _BIB)]
+
+
+def test_a_genuinely_missing_literal_key_still_fires():
+    src = build_source("main.tex", {"main.tex": "\\cite{ghost}\n"})
+    assert ("bib.cite_key_missing", "ghost") in [(f.rule, f.symbol) for f in check_bibliography(src, _BIB)]

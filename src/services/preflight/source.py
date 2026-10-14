@@ -248,3 +248,19 @@ def build_source(main_file: str, files: Mapping[str, str]) -> PreflightSource:
         unresolved_includes=tuple(unresolved),
         unexamined_files=unexamined,
     )
+
+
+def is_unresolvable_key(key: str) -> bool:
+    """``True`` for a ``\\ref``/``\\cite`` key this static analysis can never match literally.
+
+    Two shapes qualify. ``#1`` is a ``\\newcommand`` parameter, not a real key. A key containing a
+    backslash (``\\ref{\\figlabel}``, ``\\cite{\\mykey}``, ``\\ref{fig:a\\arabic{n}}``) is a macro
+    expansion whose value is only known to TeX at compile time, so it can never equal a literal
+    ``\\label`` name or BibTeX key. Reporting either as undefined or missing would be a `critical`
+    on a document that is very likely correct.
+
+    Lives here rather than in a rule module because both ``rules/crossref.py`` and
+    ``rules/bibliography.py`` need it, and importing one sibling rule from another would couple
+    two modules that are otherwise independent.
+    """
+    return "#" in key or "\\" in key
