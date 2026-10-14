@@ -508,6 +508,23 @@ _LEAKING_AUTHOR_BLOCKS = (
 )
 
 
+# This repo's Elsevier seed (src/services/template_builtins.py:286-291) emits ONE \author command
+# per name, so each value is judged on its own -- unlike the Springer seed above, which joins all
+# three into a single \and block where "First Author" happens to carry the whole block past the
+# containment test. Judged alone, an ordinal placeholder has to match a marker by itself.
+_ELSEVIER_SEED_AUTHOR_VALUES = (
+    "First Author\\corref{cor1}",
+    "Second Author",
+    "Third Author",
+)
+
+
+def test_this_repo_s_elsevier_seed_author_commands_are_clean_one_at_a_time():
+    for value in _ELSEVIER_SEED_AUTHOR_VALUES:
+        doc = f"\\author[inst1]{{{value}}}\n"
+        assert check_anonymity(build_source("main.tex", {"main.tex": doc})) == [], value
+
+
 def test_no_major_venue_s_unmodified_anonymous_template_fires_a_critical():
     for value, venue in _ANONYMISED_AUTHOR_BLOCKS:
         doc = f"\\author{{{value}}}\n"

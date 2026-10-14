@@ -179,9 +179,19 @@ _PLACEHOLDER_AUTHOR_MARKERS = frozenset(
         "author name",
         "tên tác giả",
         "ten tac gia",
-        "first author",
         "your name",
     }
+)
+
+# Ordinal author placeholders, as a pattern rather than more entries above: the Springer seed
+# (template_builtins.py:77-79) writes "First Author \and Second Author \and Third Author" in ONE
+# command, while the Elsevier seed (:286-291) writes one \author per name. Listing only
+# "first author" was enough for the Springer block -- containment let the first name vouch for the
+# whole thing -- but judged alone, "Second Author" and "Third Author" matched nothing and fired a
+# `critical` on this repo's own unmodified seed. The ordinals go up to tenth because a seed with
+# more than ten placeholder authors is not a thing.
+_ORDINAL_AUTHOR_PLACEHOLDER_RE = re.compile(
+    r"\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+author\b"
 )
 
 # One flat lookup for the predicate below; the two sets above stay separate because they have
@@ -212,7 +222,9 @@ def _is_anonymous_placeholder(raw: str) -> bool:
     visible = _visible_text(raw).lower()
     if not visible:
         return True
-    return any(marker in visible for marker in _ANONYMISED_VALUE_MARKERS)
+    if any(marker in visible for marker in _ANONYMISED_VALUE_MARKERS):
+        return True
+    return bool(_ORDINAL_AUTHOR_PLACEHOLDER_RE.search(visible))
 
 
 def _check_author_or_affiliation(src: PreflightSource, command_re: re.Pattern[str], rule: str) -> list[Finding]:
