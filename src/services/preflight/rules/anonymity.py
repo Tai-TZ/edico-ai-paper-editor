@@ -179,9 +179,19 @@ _PLACEHOLDER_AUTHOR_MARKERS = frozenset(
         "author name",
         "tên tác giả",
         "ten tac gia",
-        "first author",
         "your name",
     }
+)
+
+# Ordinal author placeholders, as a pattern rather than more entries above: the Springer seed
+# (template_builtins.py:77-79) writes "First Author \and Second Author \and Third Author" in ONE
+# command, while the Elsevier seed (:286-291) writes one \author per name. Listing only
+# "first author" was enough for the Springer block -- containment let the first name vouch for the
+# whole thing -- but judged alone, "Second Author" and "Third Author" matched nothing and fired a
+# `critical` on this repo's own unmodified seed. The ordinals go up to tenth because a seed with
+# more than ten placeholder authors is not a thing.
+_ORDINAL_AUTHOR_PLACEHOLDER_RE = re.compile(
+    r"\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+author\b"
 )
 
 # One flat lookup for the predicate below; the two sets above stay separate because they have
@@ -212,7 +222,35 @@ def _is_anonymous_placeholder(raw: str) -> bool:
     visible = _visible_text(raw).lower()
     if not visible:
         return True
-    return any(marker in visible for marker in _ANONYMISED_VALUE_MARKERS)
+    if any(marker in visible for marker in _ANONYMISED_VALUE_MARKERS):
+        return True
+    return bool(_ORDINAL_AUTHOR_PLACEHOLDER_RE.search(visible))
+
+
+# ``\and`` separates author entries inside one \author block. ``\\`` deliberately does NOT: it
+# separates lines WITHIN a single entry, which is how every venue's anonymous block is written
+# ("Anonymous Author(s) \\ Affiliation \\ Address" is one entry on three lines). Splitting on
+# ``\\`` as well would leave "Affiliation" and "Address" as segments carrying no marker, firing a
+# `critical` on exactly the templates the marker list exists to protect.
+_AUTHOR_ENTRY_SEPARATOR_RE = re.compile(r"\\and\b")
+
+
+def _leaking_entries(raw: str) -> list[str]:
+    """Visible text of each ``\\and``-separated entry in ``raw`` that is not anonymised.
+
+    Judging the block as a whole let one marker vouch for every name in it, so
+    ``\\author{Jane Doe \\and Anonymous}`` read as anonymised and the real name went unreported —
+    the worst direction to be wrong in, because the author believes the paper is blinded. Each
+    entry now stands on its own evidence.
+    """
+    leaks: list[str] = []
+    for segment in _AUTHOR_ENTRY_SEPARATOR_RE.split(raw):
+        if _is_anonymous_placeholder(segment):
+            continue
+        visible = _visible_text(segment)
+        if visible:
+            leaks.append(visible)
+    return leaks
 
 
 def _check_author_or_affiliation(src: PreflightSource, command_re: re.Pattern[str], rule: str) -> list[Finding]:
@@ -220,12 +258,12 @@ def _check_author_or_affiliation(src: PreflightSource, command_re: re.Pattern[st
     first: tuple[str, int, str] | None = None
     for path, masked in src.iter_masked():
         for match, raw in _iter_brace_commands(masked, command_re):
-            if _is_anonymous_placeholder(raw):
+            leaks = _leaking_entries(raw)
+            if not leaks:
                 continue
-            count += 1
+            count += len(leaks)
             if first is None:
-                symbol = _visible_text(raw) or raw.strip()
-                first = (path, match.start(), symbol)
+                first = (path, match.start(), ", ".join(leaks))
     if first is None:
         return []
     path, offset, symbol = first

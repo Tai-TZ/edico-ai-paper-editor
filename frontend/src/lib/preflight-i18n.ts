@@ -91,9 +91,9 @@ const COPY: Record<UiLanguage, PreflightCopy> = {
     suppressedRuleHeading: "Suppressed rules",
     suppressedReason: {
       unresolved_includes:
-        "Turned off for this report — it depends on a \\input file that could not be found, so the result would not be reliable.",
+        "Turned off for this report — it depends on a \\input file that could not be found, so the result would not be reliable. Add the file to the project, or delete the \\input line asking for it, then run the check again.",
       unexamined_files:
-        "Turned off for this report — your project has a .tex file that the main file never pulls in with \\input or \\include, so nothing read its labels or citations and the result would not be reliable.",
+        "Turned off for this report — your project has a .tex file that the main file never pulls in with \\input or \\include, so nothing read its labels or citations and the result would not be reliable. Either \\input it from the main file, or delete it if it is left over, then run the check again.",
       double_blind_conflict:
         "Turned off for this report — your venue wants this statement in the camera-ready version, not in a blinded submission, so requiring it here would be contradictory advice.",
     },
@@ -271,9 +271,9 @@ const COPY: Record<UiLanguage, PreflightCopy> = {
     suppressedRuleHeading: "Quy tắc đã tắt",
     suppressedReason: {
       unresolved_includes:
-        "Đã tắt cho báo cáo này — mục này phụ thuộc vào một tệp \\input chưa tìm thấy, nên kết quả sẽ không đáng tin cậy.",
+        "Đã tắt cho báo cáo này — mục này phụ thuộc vào một tệp \\input chưa tìm thấy, nên kết quả sẽ không đáng tin cậy. Hãy thêm tệp đó vào dự án, hoặc xoá dòng \\input đang gọi nó, rồi kiểm tra lại.",
       unexamined_files:
-        "Đã tắt cho báo cáo này — trong dự án có tệp .tex mà tệp chính không nạp qua \\input hay \\include, nên chưa có gì đọc các nhãn và trích dẫn trong đó, kết quả sẽ không đáng tin cậy.",
+        "Đã tắt cho báo cáo này — trong dự án có tệp .tex mà tệp chính không nạp qua \\input hay \\include, nên chưa có gì đọc các nhãn và trích dẫn trong đó, kết quả sẽ không đáng tin cậy. Hãy \\input tệp đó từ tệp chính, hoặc xoá nó nếu là tệp còn sót lại, rồi kiểm tra lại.",
       double_blind_conflict:
         "Đã tắt cho báo cáo này — tạp chí/hội nghị muốn tuyên bố này xuất hiện ở bản camera-ready, không phải ở bài nộp phản biện kín, nên yêu cầu tuyên bố này ở đây sẽ là lời khuyên mâu thuẫn.",
     },

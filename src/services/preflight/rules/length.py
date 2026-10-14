@@ -94,6 +94,16 @@ _MATH_ENV_RE = re.compile(
     r")\}.*?\\end\{\1\}",
     re.DOTALL,
 )
+# Tabular bodies. Venues count a table's CAPTION toward a word limit but not the contents of its
+# cells, and a results table of a hundred numeric cells would otherwise add a hundred "words" and
+# make the estimate useless -- an overcount large enough to fire length.near_limit on a paper
+# comfortably inside its limit. The caption sits outside the tabular (inside the enclosing
+# `table` float), so blanking just these bodies keeps it counted. `array` is deliberately absent:
+# it only appears in math mode, which _MATH_ENV_RE has already removed by then.
+_TABULAR_ENV_RE = re.compile(
+    r"\\begin\{(tabular\*?|tabularx|tabulary|longtable|supertabular|xltabular)\}.*?\\end\{\1\}",
+    re.DOTALL,
+)
 # Display math $$...$$ -- matched, and stripped, before the single-dollar pattern below so a
 # "$$...$$" pair is consumed as one span instead of being misread as two empty "$...$" runs.
 _DISPLAY_DOLLAR_MATH_RE = re.compile(r"\$\$.*?\$\$", re.DOTALL)
@@ -182,6 +192,7 @@ def _strip_math(text: str) -> str:
     """Blank every math span to a single space (not an empty string) so two words that sat on
     either side of it, e.g. ``"holds.$x$next"``, never fuse into one token."""
     text = _MATH_ENV_RE.sub(" ", text)
+    text = _TABULAR_ENV_RE.sub(" ", text)
     text = _DISPLAY_DOLLAR_MATH_RE.sub(" ", text)
     text = _strip_inline_dollar_math(text)
     text = _PAREN_MATH_RE.sub(" ", text)
