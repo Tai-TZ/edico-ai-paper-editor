@@ -75,7 +75,10 @@ def test_multi_author_and_is_a_single_populated_finding():
     out = check_anonymity(build_source("main.tex", {"main.tex": "\\author{Jane Doe \\and John Smith}\n"}))
     hits = [f for f in out if f.rule == "anon.author_populated"]
     assert len(hits) == 1
-    assert hits[0].symbol == "Jane Doe John Smith"
+    # Comma-joined because each \and entry is now judged separately; the block used to be flattened
+    # into "Jane Doe John Smith", which reads like one person with three names.
+    assert hits[0].symbol == "Jane Doe, John Smith"
+    assert hits[0].count == 2
 
 
 # --- extra: email ---------------------------------------------------------------------------
@@ -543,6 +546,40 @@ def test_a_real_identity_still_fires_critical_in_both_commands():
         assert "anon.author_populated" in _a(author), f"author, {shape}: {value!r}"
         affiliation = f"\\institute{{{value}}}\n"
         assert "anon.affiliation_populated" in _a(affiliation), f"institute, {shape}: {value!r}"
+
+
+# A marker anywhere in the block used to vouch for the whole block, so one real name standing
+# beside an anonymised one went unreported -- the leak the author most needs told about, because
+# they believe they anonymised the paper. Each \and-separated segment is now judged on its own.
+_PARTIALLY_ANONYMISED_BLOCKS = (
+    ("Jane Doe \\and Anonymous", "real name first"),
+    ("Anonymous \\and Jane Doe", "real name second"),
+    ("Anonymous \\and Jane Doe \\and Anonymous", "real name in the middle"),
+    ("First Author \\and Jane Doe", "a real name beside a template placeholder"),
+)
+
+
+def test_a_real_name_beside_an_anonymised_one_still_leaks():
+    for value, shape in _PARTIALLY_ANONYMISED_BLOCKS:
+        author = f"\\author{{{value}}}\n"
+        assert "anon.author_populated" in _a(author), f"author, {shape}: {value!r}"
+        affiliation = f"\\institute{{{value}}}\n"
+        assert "anon.affiliation_populated" in _a(affiliation), f"institute, {shape}: {value!r}"
+
+
+def test_the_reported_symbol_names_the_leaking_segment_not_the_whole_block():
+    out = [f for f in check_anonymity(build_source("main.tex", {"main.tex": "\\author{Anonymous \\and Jane Doe}\n"}))]
+    leak = [f for f in out if f.rule == "anon.author_populated"]
+    assert leak and "Jane Doe" in leak[0].symbol
+    assert "Anonymous" not in leak[0].symbol
+
+
+def test_splitting_on_and_does_not_break_a_block_whose_segments_are_all_anonymised():
+    # The ICLR and CVPR blocks use "\\\\" as an internal separator, never "\\and", so they stay one
+    # segment. The Springer seed is the \and case that must still pass, segment by segment.
+    for value, venue in _ANONYMISED_AUTHOR_BLOCKS:
+        doc = f"\\author{{{value}}}\n"
+        assert check_anonymity(build_source("main.tex", {"main.tex": doc})) == [], f"{venue}: {value!r}"
 
 
 def test_a_real_institution_name_is_not_mistaken_for_an_anonymised_value():
