@@ -373,11 +373,36 @@ def _assets_fingerprint(assets: list) -> str:
     return digest.hexdigest()
 
 
-def _workspace_cache_key(cache_id: str | None, assets_key: str) -> str:
+def _workspace_cache_key(cache_id: str | None, assets_key: str, owner_key: str) -> str:
+    """Workspace identity: the CALLER plus what they asked to compile.
+
+    ``owner_key`` is derived server-side (``_compile_client_key`` in ``src/api/routes.py``: the
+    authenticated user when the bearer token verifies, else the client IP) and is not optional,
+    because both things it guards against were real:
+
+    - ``cache_id`` is client-supplied and ``POST /compile`` has no auth dependency at all, so
+      keying on it alone handed two unrelated callers the same directory. The frontend passes the
+      SHARE TOKEN as ``cache_id`` on the anonymous share-viewer page
+      (``frontend/src/routes/share.$token.tsx``), and ``/compile`` never consults the share
+      service, so a forwarded or revoked link kept working as a key into that project's workspace.
+    - ``_assets_fingerprint([])`` is ``sha256(b"")``, a constant, so every request with no
+      ``cache_id`` and no assets -- the ordinary not-yet-saved-project path -- collapsed onto one
+      global directory. That one needed no attacker at all.
+
+    The owner goes in both branches rather than replacing the cache id, so a user recompiling
+    their own project still reuses their own incremental workspace. Isolation must not cost that.
+    """
+    owner = _hash_owner_key(owner_key)
     project = (cache_id or "").strip()
     if project:
-        return f"proj:{project}"
-    return f"ephemeral:{assets_key}"
+        return f"owner:{owner}|proj:{project}"
+    return f"owner:{owner}|ephemeral:{assets_key}"
+
+
+def _hash_owner_key(owner_key: str) -> str:
+    """Short digest of the caller identity — it can be an IP, which has no business sitting in a
+    dict key that gets logged or surfaced in a diagnostic."""
+    return hashlib.sha256((owner_key or "anonymous").encode("utf-8")).hexdigest()[:32]
 
 
 def _workspace_content_digest(
@@ -460,11 +485,17 @@ def _prune_workspaces(now: float | None = None) -> None:
         shutil.rmtree(workspace.path, ignore_errors=True)
 
 
-def _get_cached_compile_workspace(cache_id: str | None) -> Path | None:
+def _get_cached_compile_workspace(cache_id: str | None, *, owner_key: str) -> Path | None:
+    """Look up a workspace the SAME caller stored earlier.
+
+    Goes through ``_workspace_cache_key`` rather than rebuilding the key string here: when the
+    owner component was added, a hand-built ``f"proj:{project}"`` silently stopped matching
+    anything and broke SyncTeX's cached-workspace path with no test failure to show it.
+    """
     project = (cache_id or "").strip()
     if not project:
         return None
-    key = f"proj:{project}"
+    key = _workspace_cache_key(project, "", owner_key)
     with _workspace_lock:
         _prune_workspaces()
         cached = _workspaces.get(key)
@@ -494,8 +525,9 @@ def _acquire_workspace(
     assets: list,
     *,
     assets_key: str,
+    owner_key: str,
 ) -> tuple[Path, bool]:
-    workspace_key = _workspace_cache_key(cache_id, assets_key)
+    workspace_key = _workspace_cache_key(cache_id, assets_key, owner_key)
     resync: list[str] = []
 
     with _workspace_lock:
@@ -1178,16 +1210,23 @@ def _run_compile_attempts(
     return logs
 
 
-def compile_latex(request: CompileRequest) -> CompileResponse:
+def compile_latex(request: CompileRequest, *, owner_key: str = "") -> CompileResponse:
+    """``owner_key`` scopes the compile workspace to the caller — see ``_workspace_cache_key``.
+
+    It defaults to empty only so existing unit tests can call this without inventing an identity;
+    every production caller passes one (``src/api/routes.py`` hands over the same key it already
+    computes for rate limiting). Two callers who both omit it still share, which is why the
+    default must never be used by a route.
+    """
     settings = get_settings()
     _set_compile_budget(time.monotonic() + settings.compile_total_budget_sec)
     try:
-        return _compile_latex_impl(request)
+        return _compile_latex_impl(request, owner_key=owner_key)
     finally:
         _clear_compile_budget()
 
 
-def _compile_latex_impl(request: CompileRequest) -> CompileResponse:
+def _compile_latex_impl(request: CompileRequest, *, owner_key: str = "") -> CompileResponse:
     main_file = request.main_file.strip() or "main.tex"
     compiler = detect_compiler(request.latex, request.compiler)
     engine_path = find_tex_engine(compiler)
@@ -1215,6 +1254,7 @@ def _compile_latex_impl(request: CompileRequest) -> CompileResponse:
         request.cache_id,
         request.assets,
         assets_key=assets_key,
+        owner_key=owner_key,
     )
     allow_package_install = fresh_workspace
     asset_names = {Path(a.name).name for a in request.assets}
@@ -1369,11 +1409,29 @@ def _parse_synctex_cli_output(stdout: str) -> dict[str, str | int] | None:
     }
 
 
+# Strip a LaTeX command down to its argument, for word-level SyncTeX matching.
+#
+# Both quantifiers are BOUNDED on purpose. Unbounded `[^}]*` made this quadratic: on a line with
+# no closing brace it scanned to the end, failed, and was retried from the next position, once per
+# starting offset. Reached from the unauthenticated POST /compile/synctex — whose `latex` field
+# accepts 2 MB, and whose lines are only split on newlines, so one line can be the whole payload —
+# and called once per candidate phrase inside _resolve_line_by_context's double loop. Measured on
+# the real call path: 8 KB of "\*{{|" took 469 ms, and the growth is clean quadratic, which puts
+# the 2 MB limit in the hours.
+#
+# 64 is far longer than any real command name; 256 is far longer than any argument worth matching
+# a SyncTeX word against. A longer run simply is not normalised, which only costs a word match.
+_COMMAND_WITH_ARG_RE = re.compile(r"\\[a-zA-Z*]{1,64}\{([^}]{0,256})\}")
+_COMMAND_TOKEN_RE = re.compile(r"\\[a-zA-Z*]{1,64}")
+_BRACE_RE = re.compile(r"[{}]")
+_WHITESPACE_RUN_RE = re.compile(r"\s+")
+
+
 def _normalize_match_text(text: str) -> str:
-    cleaned = re.sub(r"\\[a-zA-Z*]+\{([^}]*)\}", r"\1", text)
-    cleaned = re.sub(r"\\[a-zA-Z*]+", " ", cleaned)
-    cleaned = re.sub(r"[{}]", " ", cleaned)
-    return re.sub(r"\s+", " ", cleaned.lower()).strip()
+    cleaned = _COMMAND_WITH_ARG_RE.sub(r"\1", text)
+    cleaned = _COMMAND_TOKEN_RE.sub(" ", cleaned)
+    cleaned = _BRACE_RE.sub(" ", cleaned)
+    return _WHITESPACE_RUN_RE.sub(" ", cleaned.lower()).strip()
 
 
 def _resolve_line_by_context(
@@ -1458,10 +1516,11 @@ def resolve_synctex_line_from_request(
     synctex_line: int,
     word: str = "",
     context: str = "",
+    owner_key: str = "",
 ) -> int:
     source_latex = latex.strip()
     if not source_latex and (cache_id or "").strip():
-        work_dir = _get_cached_compile_workspace(cache_id)
+        work_dir = _get_cached_compile_workspace(cache_id, owner_key=owner_key)
         if work_dir is not None:
             source_latex = _read_workspace_latex(work_dir, Path(jobname).stem or "main")
     return resolve_synctex_line(source_latex, synctex_line, word, context)
@@ -1550,6 +1609,7 @@ def parse_synctex_inverse_disambiguated(
     latex: str = "",
     context: str = "",
     cache_id: str | None = None,
+    owner_key: str = "",
 ) -> dict[str, str | int | float] | None:
     """Inverse SyncTeX with y-scan when the same word appears on multiple lines."""
     synctex = find_synctex()
@@ -1560,7 +1620,7 @@ def parse_synctex_inverse_disambiguated(
     pdf_name = f"{safe_job}.pdf"
     synctex_name = f"{safe_job}.synctex.gz"
 
-    work_dir = _get_cached_compile_workspace(cache_id)
+    work_dir = _get_cached_compile_workspace(cache_id, owner_key=owner_key)
     temp_dir: tempfile.TemporaryDirectory[str] | None = None
     if work_dir is not None:
         if not (work_dir / pdf_name).is_file() or not (work_dir / synctex_name).is_file():

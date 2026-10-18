@@ -25,15 +25,31 @@ def _fresh_rate_limits():
     reset_compile_rate_limit_state()
 
 
+class _CompileCalls(list):
+    """The recorded requests, plus the owner_key each call carried.
+
+    A plain list cannot hold the extra attribute, and keeping the two in step matters: a route
+    that forgets to pass owner_key puts every caller back into one shared workspace.
+    """
+
+    owner_keys: list
+
+
 @pytest.fixture
 def fake_compile(monkeypatch):
-    calls: list = []
+    calls = _CompileCalls()
+    calls_owner: list = []
 
-    def _fake(request):
+    def _fake(request, *, owner_key=""):
+        # owner_key scopes the compile workspace to the caller (see _workspace_cache_key). It is
+        # recorded alongside the request so a test can assert the route actually supplies one —
+        # a route that forgot to would silently put every caller back in a shared workspace.
         calls.append(request)
+        calls_owner.append(owner_key)
         return CompileResponse(success=True, pdf_base64="JVBERg==", main_file=request.main_file)
 
     monkeypatch.setattr(routes, "compile_latex", _fake)
+    calls.owner_keys = calls_owner
     return calls
 
 
@@ -182,3 +198,17 @@ async def test_rotating_bogus_tokens_cannot_bypass_rate_limit(client, fake_compi
         assert statuses == [200, 200, 429]
     finally:
         get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_compile_route_passes_a_non_empty_owner_key(client, fake_compile):
+    """The route must hand compile_latex a caller identity.
+
+    compile_latex's owner_key defaults to "" so unit tests can call it without inventing an
+    identity — which means a route that forgot to pass one would silently put every caller back
+    into a single shared workspace, exactly the defect this parameter exists to close.
+    """
+    res = await client.post("/api/v1/compile", content=_payload(), headers={"Content-Type": "application/json"})
+    assert res.status_code == 200, res.text
+    assert fake_compile.owner_keys, "compile_latex was never called"
+    assert all(key for key in fake_compile.owner_keys), fake_compile.owner_keys

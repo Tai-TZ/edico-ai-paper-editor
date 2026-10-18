@@ -26,6 +26,17 @@ def _clear_compile_workspaces():
         lc._pdf_cache.clear()
 
 
+def _cached_workspace_for(cache_id: str, owner_key: str = "") -> lc._CachedWorkspace:
+    """The workspace a ``compile_latex(...)`` call stored for ``cache_id``.
+
+    Goes through ``_workspace_cache_key`` instead of spelling the key format out here. The two
+    callers below are TeX-gated, so a hardcoded ``f"proj:{cache_id}"`` rots silently in every
+    environment without pdflatex and surfaces only in the TeX Live workflow — which is exactly
+    what happened when the owner component was added to the key.
+    """
+    return lc._workspaces[lc._workspace_cache_key(cache_id, "", owner_key)]
+
+
 def test_detect_compiler_defaults_to_pdflatex():
     assert lc.detect_compiler(r"\documentclass{article}", "auto") == "pdflatex"
 
@@ -192,9 +203,50 @@ def test_assets_fingerprint_changes_with_asset_content():
 
 def test_workspace_cache_key_scopes_by_project():
     assets_key = "abc123"
-    assert lc._workspace_cache_key("proj-1", assets_key) == "proj:proj-1"
-    assert lc._workspace_cache_key("proj-2", assets_key) == "proj:proj-2"
-    assert lc._workspace_cache_key(None, assets_key) == f"ephemeral:{assets_key}"
+    owner = "user:alice"
+    assert lc._workspace_cache_key("proj-1", assets_key, owner) != lc._workspace_cache_key("proj-2", assets_key, owner)
+    assert lc._workspace_cache_key("proj-1", assets_key, owner) == lc._workspace_cache_key("proj-1", assets_key, owner)
+
+
+# The property the test above never checked: scoping by project is not the same as isolating
+# between callers. `cache_id` is client-supplied and /compile has no auth dependency at all, so
+# before the owner component existed, two unrelated callers sending the same cache_id were handed
+# the same directory on disk -- and the frontend passes the SHARE TOKEN as cache_id on the
+# anonymous share-viewer page (frontend/src/routes/share.$token.tsx), making it reachable by
+# anyone holding a link, including a revoked one.
+def test_two_callers_sending_the_same_cache_id_do_not_share_a_workspace_key():
+    assets_key = "abc123"
+    alice = lc._workspace_cache_key("same-project-id", assets_key, "user:alice")
+    bob = lc._workspace_cache_key("same-project-id", assets_key, "user:bob")
+    assert alice != bob
+
+
+# _assets_fingerprint([]) is sha256(b"") -- a fixed constant -- so every request with no cache_id
+# and no assets (the normal not-yet-saved-project path) collapsed onto ONE global directory. This
+# needed no attacker and no guessed value: it was the default.
+def test_two_callers_with_no_cache_id_and_no_assets_do_not_share_a_workspace_key():
+    empty = lc._assets_fingerprint([])
+    alice = lc._workspace_cache_key(None, empty, "user:alice")
+    bob = lc._workspace_cache_key(None, empty, "user:bob")
+    assert alice != bob
+
+
+def test_the_same_caller_still_reuses_its_own_workspace():
+    # The whole point of the cache: one user recompiling the same project keeps the incremental
+    # workspace. Isolation must not cost that.
+    empty = lc._assets_fingerprint([])
+    assert lc._workspace_cache_key("proj-1", empty, "user:alice") == lc._workspace_cache_key(
+        "proj-1", empty, "user:alice"
+    )
+    assert lc._workspace_cache_key(None, empty, "user:alice") == lc._workspace_cache_key(None, empty, "user:alice")
+
+
+def test_acquire_workspace_hands_different_directories_to_different_callers():
+    alice_dir, _ = lc._acquire_workspace("shared-cache-id", [], assets_key="k", owner_key="user:alice")
+    (alice_dir / "unpublished.tex").write_text("Alice's unpublished manuscript")
+    bob_dir, _ = lc._acquire_workspace("shared-cache-id", [], assets_key="k", owner_key="user:bob")
+    assert bob_dir != alice_dir
+    assert not (bob_dir / "unpublished.tex").exists()
 
 
 def test_compile_minimal_document_when_pdflatex_available():
@@ -222,7 +274,7 @@ def test_compile_reuses_workspace_with_hash_only_assets():
     )
     assert first.success is True
     asset_hash = lc._file_content_hash(
-        lc._workspaces["proj:proj-delta"].path / "extra.tex",
+        _cached_workspace_for("proj-delta").path / "extra.tex",
     )
     second = lc.compile_latex(
         CompileRequest(
@@ -268,6 +320,7 @@ def test_asset_resync_when_hash_only_missing():
             "proj-missing",
             [CompileAssetFile(name="fig.png", content_hash="a" * 64)],
             assets_key="deadbeef",
+            owner_key="user:alice",
         )
 
 
@@ -387,7 +440,7 @@ def test_compile_cannot_input_absolute_path_outside_workspace(tmp_path):
     assert marker not in result.log
     assert marker not in result.error
     # batchmode keeps \typeout out of stdout, so also check TeX's own transcript in the workspace.
-    tex_log = lc._workspaces[f"proj:{cache_id}"].path / "main.log"
+    tex_log = _cached_workspace_for(cache_id).path / "main.log"
     if tex_log.is_file():
         assert marker not in tex_log.read_text(encoding="utf-8", errors="replace")
     assert result.success is False or "openin_any" in result.log
@@ -531,3 +584,51 @@ def test_collect_all_tex_sources_ignores_inputs_outside_workspace(tmp_path):
     merged = lc._collect_all_tex_sources(latex, work, "main.tex")
     assert "INSIDE" in merged
     assert "OUTSIDE" not in merged
+
+
+# _get_cached_compile_workspace used to hand-build its own "proj:{id}" key instead of calling
+# _workspace_cache_key. When the owner component was added to the latter, this lookup silently
+# stopped matching any stored workspace — breaking SyncTeX's cached-workspace path without a
+# single test failing, because test_synctex_inverse_uses_cached_workspace early-returns when
+# pdflatex is absent (it is, in CI's unit job; only the TeX Live workflow would have caught it).
+# These two tests need no TeX at all, so they fail everywhere the bug exists.
+def test_cached_workspace_lookup_finds_what_acquire_workspace_stored():
+    owner = "user:alice"
+    acquired, _ = lc._acquire_workspace("proj-synctex", [], assets_key="k", owner_key=owner)
+    found = lc._get_cached_compile_workspace("proj-synctex", owner_key=owner)
+    assert found == acquired
+
+
+def test_cached_workspace_lookup_is_scoped_to_the_owner():
+    alice_dir, _ = lc._acquire_workspace("proj-synctex", [], assets_key="k", owner_key="user:alice")
+    assert lc._get_cached_compile_workspace("proj-synctex", owner_key="user:bob") is None
+    assert lc._get_cached_compile_workspace("proj-synctex", owner_key="user:alice") == alice_dir
+
+
+def test_normalize_match_text_is_linear_on_a_brace_heavy_line():
+    """A hostile single line must not take superlinear time.
+
+    `_normalize_match_text` is reached from the UNAUTHENTICATED POST /compile/synctex, whose
+    `latex` field accepts 2 MB and is only split on newlines — so one line can be the whole
+    payload — and it is called once per candidate phrase inside `_resolve_line_by_context`'s
+    double loop. With an unbounded `[^}]*` the regex scanned to end-of-line, failed for want of a
+    closing brace, and was retried from every starting offset: measured 469 ms at 8 KB, clean
+    quadratic, which puts the 2 MB field limit in the hours of CPU for a single request.
+
+    Asserted as a ratio rather than an absolute time, so a slow CI machine cannot fail it: a
+    quadratic implementation gives ~4x per doubling, a linear one ~2x.
+    """
+    import time
+
+    def elapsed(repetitions: int) -> float:
+        line = "\\*{{|" * repetitions
+        start = time.perf_counter()
+        lc._normalize_match_text(line)
+        return time.perf_counter() - start
+
+    elapsed(2000)  # warm up, so the first call's import/compile cost is not in the measurement
+    small = elapsed(4000)
+    large = elapsed(16000)
+    # 4x the input. Linear predicts ~4x the time; the old quadratic predicted ~16x. 8x leaves
+    # generous headroom for timer noise while still failing a quadratic regression.
+    assert large < small * 8, f"{small=} {large=} — growth looks superlinear"
