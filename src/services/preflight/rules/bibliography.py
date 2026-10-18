@@ -17,7 +17,7 @@ import re
 from src.services.citations.title_match import normalize_title
 from src.services.parser.latex import CITE_RE, extract_cite_keys, parse_bib_entries
 from src.services.preflight.catalogue import Finding
-from src.services.preflight.source import PreflightSource
+from src.services.preflight.source import PreflightSource, is_unresolvable_key
 
 # Capitalized natbib forms (\Cite, \Citep, \Citet, \Citeauthor, \Citeyear) with their optional
 # notes and star. CITE_RE's literal "cite" is lowercase, so it cannot match these (spec §4.4) —
@@ -152,9 +152,11 @@ def collect_cite_keys(src: PreflightSource) -> dict[str, tuple[str, int]]:
     """
     result: dict[str, tuple[str, int]] = {}
     for path, masked in src.iter_masked():
-        valid_keys = set(extract_cite_keys(masked))
+        valid_keys = {key for key in extract_cite_keys(masked) if not is_unresolvable_key(key)}
         for match in _CAPITALIZED_NATBIB_CITE_RE.finditer(masked):
-            valid_keys.update(key.strip() for key in match.group(1).split(",") if key.strip())
+            valid_keys.update(
+                key.strip() for key in match.group(1).split(",") if key.strip() and not is_unresolvable_key(key.strip())
+            )
         if not valid_keys:
             continue
 
