@@ -17,4 +17,8 @@ entry, and gitleaks ORs `regexes` with `paths`, so that would silence every find
 `tests/` instead of this one string. A real credential will never equal this literal, so matching
 it anywhere is as narrow as matching it in one directory.
 """
-regexes = ['''test-secret-key-for-jwt-signing-32chars''']
+regexes = [
+  '''test-secret-key-for-jwt-signing-32chars''',
+  # The fake ZAI key tests/test_services/test_editor_agent.py sets via monkeypatch.
+  '''test-zai-key-12345678''',
+]
