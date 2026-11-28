@@ -1,0 +1,6 @@
+# Findings gitleaks reports that have been dealt with. One fingerprint per line:
+# <commit>:<file>:<rule>:<line>, as printed in the gitleaks report.
+
+# AI_LOG_API_KEY for the instructor's AI hook logging server, committed in .env.example in May 2026
+# and removed from the file later. The key was revoked on 2026-11-28; it only remains in history.
+093608bf55110410d4f0e59645bec921d082bac7:.env.example:generic-api-key:14
