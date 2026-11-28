@@ -1,3 +1,5 @@
+<a href="https://taithanh.ai20k.cloud/vi/projects/edico-ai-paper-editor"><img src=".github/readme/portfolio-card.webp" width="100%" alt="Edico: Trình soạn thảo LaTeX có AI hỗ trợ cho bài báo khoa học: mọi thay đổi của AI đều đến dưới dạng diff để tác giả chấp nhận hoặc từ chối. Bấm để xem case study đầy đủ trên portfolio của Nguyễn Thành Tài."></a>
+
 <div align="center">
 
 <img src="./docs/assets/banner.svg" alt="Edico — From draft to proof." width="100%">
